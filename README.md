@@ -53,6 +53,33 @@ Claims and credential wire types belong to `aep`. Agent presentation behavior be
 Service issuance and verification behavior belongs to `service`. Framework integrations remain
 outside the protocol core.
 
+## Core
+
+The root package provides the AEP wire contract without a runtime JSON Schema engine:
+
+- Inspect, Claims, command, credential, and Problem Details models
+- bounded native validation with stable issue paths
+- HTTP command paths and protected-resource authorization carriers
+- `did:web` document and public-key resolution
+- EdDSA and ES256 client assertion signing and verification
+- protocol limits for assertion lifetime, clock skew, caching, and idempotency
+
+```go
+document, err := aep.ParseInspectDocument(body)
+if err != nil {
+	return err
+}
+
+statusPath, err := aep.CommandPathFromInspect(document, aep.CommandStatus)
+if err != nil {
+	return err
+}
+```
+
+Unknown additive fields and private Claim Names are accepted for forward compatibility. Registered
+Claim Values, closed Inspect objects, command relationships, and the supported AEP major version
+are validated natively.
+
 ## Development
 
 Go 1.26 or newer is required. Run the complete merge gate with:

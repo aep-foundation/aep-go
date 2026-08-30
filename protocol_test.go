@@ -1,0 +1,142 @@
+package aep
+
+import (
+	"encoding/json"
+	"errors"
+	"testing"
+)
+
+func TestProtocolMessages(t *testing.T) {
+	enroll, err := ParseEnrollRequest([]byte(`{"agent_did":"did:web:agent.example.com:agents:123","claims":{"contact.email":"ops@example.com"},"idempotency_key":"key-1"}`))
+	if err != nil || enroll.Claims == nil || enroll.AgentDID == "" {
+		t.Fatalf("unexpected Enroll parse: %#v, %v", enroll, err)
+	}
+	if _, err := ParseGrantRequest([]byte(`{"grant_type":"oauth-bearer","requested_scopes":["read"]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseRevokeRequest([]byte(`{"all_grant_types":"true"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseRevokeResponse([]byte(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseRevokeResponse([]byte(`{"unexpected":true}`)); err == nil {
+		t.Fatal("expected non-empty Revoke response to fail")
+	}
+}
+
+func TestEnrollAndStatusResponses(t *testing.T) {
+	enroll, err := ParseEnrollResponse([]byte(`{"status":"pending","owner_action_required":"false","verification_pending":["email"]}`))
+	if err != nil || enroll.Status != EnrollmentPending || enroll.OwnerActionRequired == nil {
+		t.Fatalf("unexpected Enroll response: %#v, %v", enroll, err)
+	}
+	status, err := ParseStatusResponse([]byte(`{"status":"active","since":"2026-08-29T12:00:00Z"}`))
+	if err != nil || status.Status != AgentActive {
+		t.Fatalf("unexpected Status response: %#v, %v", status, err)
+	}
+	if _, err := ParseStatusResponse([]byte(`{"status":"pending","requirements_pending":["email","email"]}`)); err == nil {
+		t.Fatal("expected duplicate pending requirements to fail")
+	}
+}
+
+func TestCoreMetadataModels(t *testing.T) {
+	hash := "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	metadata, err := ParseIdempotencyMetadata([]byte(`{"idempotency_key":"key-1","first_body_hash":"` + hash + `","future":true}`))
+	if err != nil || metadata.FirstBodyHash == nil || metadata.Additional["future"] == nil {
+		t.Fatalf("unexpected Idempotency metadata: %#v, %v", metadata, err)
+	}
+	if _, err := ParseIdempotencyMetadata([]byte(`{"idempotency_key":"key-1","first_body_hash":"SHA256:bad"}`)); err == nil {
+		t.Fatal("expected invalid body hash to fail")
+	}
+	scheme, err := ParseOpenAPIAEPSecurityScheme([]byte(`{"x-aep-authentication-method":"oauth-bearer","future":true}`))
+	if err != nil || scheme.AuthenticationMethod != "oauth-bearer" || scheme.Additional["future"] == nil {
+		t.Fatalf("unexpected OpenAPI extension: %#v, %v", scheme, err)
+	}
+}
+
+func TestCanonicalOwnerActionSerialization(t *testing.T) {
+	falseValue := "false"
+	data, err := json.Marshal(EnrollResponse{Status: EnrollmentPending, OwnerActionRequired: &falseValue})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != `{"status":"pending"}` {
+		t.Fatalf("unexpected canonical response: %s", data)
+	}
+	trueValue := "true"
+	data, err = json.Marshal(NewProblemDetails(ErrorRequirementsUnmet, "Requirements unmet", 409))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var problem ProblemDetails
+	if err := json.Unmarshal(data, &problem); err != nil {
+		t.Fatal(err)
+	}
+	problem.OwnerActionRequired = &trueValue
+	data, err = json.Marshal(problem)
+	if err != nil || !json.Valid(data) {
+		t.Fatalf("invalid Problem Details: %s, %v", data, err)
+	}
+}
+
+func TestGrantResponses(t *testing.T) {
+	response, err := ParseBuiltInGrantResponse(GrantTypeOAuthBearer, []byte(`{
+		"access_token":"token",
+		"credential_id":"credential-1",
+		"expires_at":"2027-01-01T00:00:00Z",
+		"scopes":null,
+		"token_type":"Bearer"
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.GrantType() != GrantTypeOAuthBearer {
+		t.Fatalf("unexpected grant type: %s", response.GrantType())
+	}
+	if _, err := ParseAPIKeyGrantResponse([]byte(`{"api_key":"secret","credential_id":"credential-2","expires_at":"2027-01-01T00:00:00Z","header":"X-API-Key"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseBasicGrantResponse([]byte(`{"credential_id":"credential-3","expires_at":"2027-01-01T00:00:00Z","password":"secret","username":"agent"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseOAuthBearerGrantResponse([]byte(`{"access_token":"token","credential_id":"credential-1","expires_at":"bad","token_type":"Bearer"}`)); err == nil {
+		t.Fatal("expected invalid expiration to fail")
+	}
+	if _, err := ParseBuiltInGrantResponse("future", []byte(`{}`)); err == nil {
+		t.Fatal("expected unknown built-in grant type to fail")
+	}
+}
+
+func TestProblemDetailsPrivacy(t *testing.T) {
+	problem := NewProblemDetails(ErrorNotRecognized, "Not recognized", 401)
+	problem.RequirementsPending = []string{"contact.email"}
+	err := ValidateProblemDetails(problem)
+	var validation *ValidationError
+	if !errors.As(err, &validation) {
+		t.Fatalf("expected ValidationError, got %v", err)
+	}
+	assertIssue(t, validation.Issues, "$")
+}
+
+func TestClientAssertionClaims(t *testing.T) {
+	claims := ClientAssertionClaims{
+		Audience:  "did:web:api.example.com",
+		ExpiresAt: 1_748_428_860,
+		IssuedAt:  1_748_428_800,
+		Issuer:    "did:web:agent.example.com:agents:123",
+		JWTID:     "jti-1",
+		Operation: AssertionStatus,
+		Subject:   "did:web:agent.example.com:agents:123",
+	}
+	if err := ValidateClientAssertionClaims(claims); err != nil {
+		t.Fatal(err)
+	}
+	claims.Operation = AssertionAuthenticate
+	if err := ValidateClientAssertionClaims(claims); err == nil {
+		t.Fatal("expected authenticate without resource to fail")
+	}
+	claims.Resource = "https://api.example.com/private"
+	if err := ValidateClientAssertionClaims(claims); err != nil {
+		t.Fatal(err)
+	}
+}
