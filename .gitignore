@@ -1,0 +1,5 @@
+.DS_Store
+.conformance/
+bin/
+coverage.out
+*.test
