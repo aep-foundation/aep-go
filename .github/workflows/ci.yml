@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go:
+          - 1.26.x
+          - 1.27.x
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ matrix.go }}
+
+      - name: Verify
+        run: make verify
+
+      - name: Verify clean module consumption
+        run: make consumer-smoke
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v7
+        with:
+          name: aep-go-coverage-go-${{ matrix.go }}
+          path: coverage.out
+          if-no-files-found: error
+          retention-days: 7
