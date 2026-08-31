@@ -237,14 +237,14 @@ func ParseProblemDetails(data []byte) (ProblemDetails, error) {
 	var value ProblemDetails
 	err := parseAndValidate(data, "Problem Details", &value, func() error {
 		return ValidateProblemDetails(value)
-	}, "/detail", "/instance", "/owner_action_required", "/verification_pending", "/requirements_pending")
+	}, "/detail", "/instance", "/owner_action_required", "/requirements_pending", "/verification_pending")
 	return value, err
 }
 
 func ValidateProblemDetails(value ProblemDetails) error {
 	issues := make([]ValidationIssue, 0)
-	if len(value.Type) < len("urn:aep:error:") || value.Type[:len("urn:aep:error:")] != "urn:aep:error:" {
-		issues = append(issues, ValidationIssue{Path: "$.type", Message: "Expected an AEP error URN."})
+	if value.Type != "urn:aep:error:"+string(value.Code) {
+		issues = append(issues, ValidationIssue{Path: "$.type", Message: "Expected an AEP error URN matching code."})
 	}
 	requireNonEmpty(value.Title, "$.title", &issues)
 	if value.Status == 0 {
@@ -256,8 +256,8 @@ func ValidateProblemDetails(value ProblemDetails) error {
 	}
 	validateNonEmptyStrings(value.VerificationPending, "$.verification_pending", &issues)
 	validateNonEmptyStrings(value.RequirementsPending, "$.requirements_pending", &issues)
-	if value.Code == ErrorNotRecognized && (len(value.VerificationPending) != 0 || len(value.RequirementsPending) != 0) {
-		issues = append(issues, ValidationIssue{Path: "$", Message: "not_recognized must not expose pending-name metadata."})
+	if value.Code == ErrorNotRecognized && (value.OwnerActionRequired != nil || value.RequirementsPending != nil || value.VerificationPending != nil) {
+		issues = append(issues, ValidationIssue{Path: "$", Message: "not_recognized must not expose pending or owner-action metadata."})
 	}
 	return validationResult("Problem Details", issues)
 }

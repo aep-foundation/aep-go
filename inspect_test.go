@@ -121,6 +121,14 @@ func TestInspectDocumentRelationships(t *testing.T) {
 	}
 	assertIssue(t, validation.Issues, "$.commands.grant_types_config.future")
 	assertIssue(t, validation.Issues, "$.commands.grant_types_config.oauth-bearer.supports_per_credential_revoke")
+
+	document = minimalInspectDocument()
+	document.Commands.Supported = append(document.Commands.Supported, Command(AssertionAuthenticate))
+	err = ValidateInspectDocument(document)
+	if !errors.As(err, &validation) {
+		t.Fatalf("expected ValidationError, got %v", err)
+	}
+	assertIssue(t, validation.Issues, "$.commands.supported")
 }
 
 func TestInspectRejectsNullOptionalObject(t *testing.T) {

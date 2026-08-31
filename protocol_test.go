@@ -161,6 +161,22 @@ func TestProblemDetailsPrivacy(t *testing.T) {
 	assertIssue(t, validation.Issues, "$")
 }
 
+func TestProblemDetailsSemantics(t *testing.T) {
+	for _, data := range []string{
+		`{"type":"urn:aep:error:not_recognized","status":401,"code":"not_recognized"}`,
+		`{"type":"urn:aep:error:not_recognized","title":null,"status":401,"code":"not_recognized"}`,
+		`{"type":"urn:aep:error:not_recognized","title":"","status":401,"code":"not_recognized"}`,
+		`{"type":"urn:aep:error:invalid_request","title":"Not recognized","status":401,"code":"not_recognized"}`,
+		`{"type":"urn:aep:error:not_recognized","title":"Not recognized","status":401,"code":"not_recognized","owner_action_required":"true"}`,
+		`{"type":"urn:aep:error:not_recognized","title":"Not recognized","status":401,"code":"not_recognized","requirements_pending":[]}`,
+		`{"type":"urn:aep:error:not_recognized","title":"Not recognized","status":401,"code":"not_recognized","verification_pending":[]}`,
+	} {
+		if _, err := ParseProblemDetails([]byte(data)); err == nil {
+			t.Fatalf("invalid Problem Details was accepted: %s", data)
+		}
+	}
+}
+
 func TestClientAssertionClaims(t *testing.T) {
 	claims := ClientAssertionClaims{
 		Audience:  "did:web:api.example.com",
