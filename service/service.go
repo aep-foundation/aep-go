@@ -86,6 +86,10 @@ func New(options Options) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	claimValueLimits, err := resolveClaimValueLimits(options.ClaimValueLimits)
+	if err != nil {
+		return nil, err
+	}
 	clock := options.Clock
 	if clock == nil {
 		clock = time.Now
@@ -113,6 +117,7 @@ func New(options Options) (*Service, error) {
 	return &Service{
 		authenticationMethods: authenticationMethods,
 		clientAssertion:       clientAssertion,
+		claimValueLimits:      claimValueLimits,
 		clock:                 clock,
 		document:              document,
 		enrollmentPolicy:      enrollmentPolicy,

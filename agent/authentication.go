@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	aep "github.com/aep-foundation/aep-go"
@@ -149,7 +148,7 @@ func credentialHeaders(record CredentialRecord, carrier aep.ProtectedResourceCar
 	case aep.OAuthBearerGrantResponse:
 		return authorizationHeaders(aep.CredentialSchemeBearer, value.AccessToken, carrier)
 	case aep.APIKeyGrantResponse:
-		if !validHeaderName(value.Header) {
+		if !aep.IsHTTPFieldName(value.Header) {
 			return nil, errors.New("AEP API-key credential has an invalid header name")
 		}
 		headers := make(http.Header)
@@ -237,16 +236,4 @@ func authenticationMethodIndex(values []aep.AuthenticationMethod, expected aep.A
 		}
 	}
 	return -1
-}
-
-func validHeaderName(value string) bool {
-	if value == "" {
-		return false
-	}
-	for _, character := range value {
-		if !strings.ContainsRune("!#$%&'*+-.^_`|~0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", character) {
-			return false
-		}
-	}
-	return true
 }

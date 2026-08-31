@@ -125,6 +125,31 @@ func TestGrantResponses(t *testing.T) {
 	}
 }
 
+func TestBuiltInCredentialPresentationValuesAreSafe(t *testing.T) {
+	apiKey := APIKeyGrantResponse{
+		APIKey: "secret value", CredentialID: "credential-1", ExpiresAt: "2027-01-01T00:00:00Z", Header: "x-api-key",
+	}
+	if err := ValidateAPIKeyGrantResponse(apiKey); err == nil {
+		t.Fatal("API key containing whitespace was accepted")
+	}
+	apiKey.APIKey = "safe-secret"
+	apiKey.Header = "invalid header"
+	if err := ValidateAPIKeyGrantResponse(apiKey); err == nil {
+		t.Fatal("invalid API-key header name was accepted")
+	}
+	basic := BasicGrantResponse{
+		CredentialID: "credential-2", ExpiresAt: "2027-01-01T00:00:00Z", Password: "secret", Username: "agent:name",
+	}
+	if err := ValidateBasicGrantResponse(basic); err == nil {
+		t.Fatal("Basic username containing a colon was accepted")
+	}
+	basic.Username = "agent"
+	basic.Password = "secret\n"
+	if err := ValidateBasicGrantResponse(basic); err == nil {
+		t.Fatal("Basic password containing a control character was accepted")
+	}
+}
+
 func TestProblemDetailsPrivacy(t *testing.T) {
 	problem := NewProblemDetails(ErrorNotRecognized, "Not recognized", 401)
 	problem.RequirementsPending = []string{"contact.email"}

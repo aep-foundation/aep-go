@@ -20,6 +20,14 @@ func (session *Session) Enroll(ctx context.Context, options EnrollOptions) (Comm
 	if err != nil {
 		return CommandResult[aep.EnrollResponse]{}, err
 	}
+	var required []aep.ClaimName
+	if inspection.Document.Claims != nil {
+		required = inspection.Document.Claims.Required
+	}
+	missing := aep.MissingRequiredClaimNames(required, options.Claims)
+	if len(missing) != 0 {
+		return CommandResult[aep.EnrollResponse]{}, &ClaimRequirementsError{MissingRequiredClaimNames: append([]aep.ClaimName(nil), missing...)}
+	}
 	key, err := session.idempotencyKey(ctx, inspection, OperationKey{Command: aep.CommandEnroll}, options.IdempotencyKey)
 	if err != nil {
 		return CommandResult[aep.EnrollResponse]{}, err

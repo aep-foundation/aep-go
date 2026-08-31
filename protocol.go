@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -363,6 +364,12 @@ func ValidateAPIKeyGrantResponse(value APIKeyGrantResponse) error {
 	issues := make([]ValidationIssue, 0)
 	requireNonEmpty(value.APIKey, "$.api_key", &issues)
 	requireNonEmpty(value.Header, "$.header", &issues)
+	if value.APIKey != "" && !validAPIKeyValue(value.APIKey) {
+		issues = append(issues, ValidationIssue{Path: "$.api_key", Message: "Expected an unambiguous HTTP field value."})
+	}
+	if value.Header != "" && !IsHTTPFieldName(value.Header) {
+		issues = append(issues, ValidationIssue{Path: "$.header", Message: "Expected an HTTP field name."})
+	}
 	requireCredentialFields(value.CredentialID, value.ExpiresAt, value.Scopes, &issues)
 	return validationResult("API-key Grant response", issues)
 }
@@ -371,11 +378,44 @@ func ValidateBasicGrantResponse(value BasicGrantResponse) error {
 	issues := make([]ValidationIssue, 0)
 	requireNonEmpty(value.Password, "$.password", &issues)
 	requireNonEmpty(value.Username, "$.username", &issues)
+	if value.Username != "" && (strings.ContainsRune(value.Username, ':') || containsControlCharacter(value.Username)) {
+		issues = append(issues, ValidationIssue{Path: "$.username", Message: "Expected an RFC 7617 username without a colon or control character."})
+	}
+	if value.Password != "" && containsControlCharacter(value.Password) {
+		issues = append(issues, ValidationIssue{Path: "$.password", Message: "Expected a value without control characters."})
+	}
 	if value.Realm != nil && *value.Realm == "" {
 		issues = append(issues, ValidationIssue{Path: "$.realm", Message: "Expected a non-empty string."})
 	}
 	requireCredentialFields(value.CredentialID, value.ExpiresAt, value.Scopes, &issues)
 	return validationResult("Basic Grant response", issues)
+}
+
+func validAPIKeyValue(value string) bool {
+	for _, character := range []byte(value) {
+		if character < 0x21 || character > 0x7e || character == 0x22 || character == 0x2c || character == 0x3b || character == 0x5c {
+			return false
+		}
+	}
+	return value != ""
+}
+
+func IsHTTPFieldName(value string) bool {
+	for _, character := range value {
+		if !strings.ContainsRune("!#$%&'*+-.^_`|~0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ", character) {
+			return false
+		}
+	}
+	return value != ""
+}
+
+func containsControlCharacter(value string) bool {
+	for _, character := range value {
+		if character <= 0x1f || character == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 func requireCredentialFields(credentialID, expiresAt string, scopes []string, issues *[]ValidationIssue) {

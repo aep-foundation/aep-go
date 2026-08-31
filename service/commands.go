@@ -25,7 +25,7 @@ func (service *Service) Enroll(ctx context.Context, body []byte, options Command
 		return problemResult[aep.EnrollResponse](aep.ErrorNotRecognized, "Not recognized", http.StatusUnauthorized), nil
 	}
 	request, err := aep.ParseEnrollRequest(body)
-	if err != nil || request.AgentDID != claims.Subject || !validIdempotencyKey(options.IdempotencyKey) || (request.IdempotencyKey != "" && request.IdempotencyKey != options.IdempotencyKey) {
+	if err != nil || request.AgentDID != claims.Subject || !claimValuesWithinLimits(request.Claims, service.claimValueLimits) || !validIdempotencyKey(options.IdempotencyKey) || (request.IdempotencyKey != "" && request.IdempotencyKey != options.IdempotencyKey) {
 		return problemResult[aep.EnrollResponse](aep.ErrorInvalidRequest, "Invalid request", http.StatusBadRequest), nil
 	}
 	return executeIdempotent(service, ctx, claims.Subject, IdempotentEnroll, options.IdempotencyKey, request, aep.ParseEnrollResponse, func() (Result[aep.EnrollResponse], error) {
@@ -151,7 +151,7 @@ func (service *Service) Grant(ctx context.Context, body []byte, options CommandO
 		if cloneErr != nil {
 			return Result[json.RawMessage]{}, cloneErr
 		}
-		credential, grantErr := handler.Grant(ctx, request, GrantContext{AgentDID: claims.Subject, Enrollment: enrollment, GrantType: request.GrantType})
+		credential, grantErr := handler.Grant(ctx, request, GrantContext{AgentDID: claims.Subject, Enrollment: enrollment, GrantType: request.GrantType, Now: service.clock()})
 		if grantErr != nil {
 			return Result[json.RawMessage]{}, grantErr
 		}
@@ -199,19 +199,20 @@ func (service *Service) Revoke(ctx context.Context, body []byte, options Command
 			return Result[aep.RevokeResponse]{}, cloneErr
 		}
 		if request.AllGrantTypes == "true" {
+			now := service.clock()
 			grantTypes := make([]aep.GrantType, 0, len(service.grantHandlers))
 			for grantType := range service.grantHandlers {
 				grantTypes = append(grantTypes, grantType)
 			}
 			slices.Sort(grantTypes)
 			for _, grantType := range grantTypes {
-				if err := service.grantHandlers[grantType].Revoke(ctx, request, RevokeContext{AgentDID: claims.Subject, Enrollment: enrollment, GrantType: grantType}); err != nil {
+				if err := service.grantHandlers[grantType].Revoke(ctx, request, RevokeContext{AgentDID: claims.Subject, Enrollment: enrollment, GrantType: grantType, Now: now}); err != nil {
 					return Result[aep.RevokeResponse]{}, err
 				}
 			}
 		} else {
 			handler := service.grantHandlers[request.GrantType]
-			if err := handler.Revoke(ctx, request, RevokeContext{AgentDID: claims.Subject, Enrollment: enrollment, GrantType: request.GrantType}); err != nil {
+			if err := handler.Revoke(ctx, request, RevokeContext{AgentDID: claims.Subject, Enrollment: enrollment, GrantType: request.GrantType, Now: service.clock()}); err != nil {
 				return Result[aep.RevokeResponse]{}, err
 			}
 		}

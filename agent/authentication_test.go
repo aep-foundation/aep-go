@@ -113,7 +113,7 @@ func TestAuthenticationRejectsInvalidInputs(t *testing.T) {
 	if _, err := session.AuthenticationHeaders(context.Background(), AuthenticationOptions{GrantType: aep.GrantTypeOAuthBearer, Resource: mustURL(t, server.URL+"/private")}); !errors.Is(err, ErrNoAuthenticationMethod) {
 		t.Fatalf("unadvertised grant type was accepted: %v", err)
 	}
-	if validHeaderName("") || validHeaderName("Bad Header") || !validHeaderName("X-Service-Key") {
+	if aep.IsHTTPFieldName("") || aep.IsHTTPFieldName("Bad Header") || !aep.IsHTTPFieldName("X-Service-Key") {
 		t.Fatal("header-name validation is incorrect")
 	}
 }

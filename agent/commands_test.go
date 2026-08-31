@@ -37,6 +37,34 @@ func TestCommandFailureIncludesProblemDetails(t *testing.T) {
 	}
 }
 
+func TestEnrollRejectsUnsatisfiedRequiredClaimsBeforeCommand(t *testing.T) {
+	var commandCalls atomic.Int32
+	var serviceDID string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", aep.MediaType)
+		if request.URL.Path == aep.WellKnownPath {
+			document := testInspectDocument(serviceDID)
+			document.Claims = &aep.InspectClaims{Required: []aep.ClaimName{aep.ClaimContactEmail}}
+			_ = json.NewEncoder(response).Encode(document)
+			return
+		}
+		commandCalls.Add(1)
+		_ = json.NewEncoder(response).Encode(aep.EnrollResponse{Status: aep.EnrollmentActive})
+	}))
+	defer server.Close()
+	serviceDID = didWebForServer(server.URL)
+	client := testClient(t, server, newTestIdentityProvider(t))
+	session, _ := client.Service(server.URL)
+	_, err := session.Enroll(context.Background(), EnrollOptions{})
+	var requirements *ClaimRequirementsError
+	if !errors.As(err, &requirements) || len(requirements.MissingRequiredClaimNames) != 1 || requirements.MissingRequiredClaimNames[0] != aep.ClaimContactEmail {
+		t.Fatalf("unexpected Claim requirements error: %#v, %v", requirements, err)
+	}
+	if commandCalls.Load() != 0 {
+		t.Fatal("Enroll command was sent with unsatisfied required claims")
+	}
+}
+
 func TestRevokeRejectsContradictorySelector(t *testing.T) {
 	provider := newTestIdentityProvider(t)
 	client, err := New(Options{IdentityProvider: provider})
