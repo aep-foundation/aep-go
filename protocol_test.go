@@ -17,6 +17,24 @@ func TestProtocolMessages(t *testing.T) {
 	if _, err := ParseRevokeRequest([]byte(`{"all_grant_types":"true"}`)); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := ParseEnrollRequest([]byte(`{"agent_did":"did:web:agent.example.com:agents:123"}`)); err != nil {
+		t.Fatalf("optional Enroll body idempotency key was rejected: %v", err)
+	}
+	if _, err := ParseEnrollRequest([]byte(`{"agent_did":"did:web:agent.example.com:agents:123","idempotency_key":""}`)); err == nil {
+		t.Fatal("empty Enroll body idempotency key was accepted")
+	}
+	if _, err := ParseRevokeRequest([]byte(`{"credential_id":"credential-1","grant_type":"oauth-bearer"}`)); err != nil {
+		t.Fatalf("targeted Revoke was rejected: %v", err)
+	}
+	if _, err := ParseRevokeRequest([]byte(`{"credential_id":"credential-1"}`)); err == nil {
+		t.Fatal("credential-only Revoke was accepted")
+	}
+	if _, err := ParseRevokeRequest([]byte(`{"all_grant_types":"true","grant_type":"oauth-bearer"}`)); err == nil {
+		t.Fatal("conflicting Revoke selectors were accepted")
+	}
+	if _, err := ParseRevokeRequest([]byte(`{"credential_id":"","grant_type":"oauth-bearer"}`)); err == nil {
+		t.Fatal("empty targeted Revoke credential ID was accepted")
+	}
 	if _, err := ParseRevokeResponse([]byte(`{}`)); err != nil {
 		t.Fatal(err)
 	}

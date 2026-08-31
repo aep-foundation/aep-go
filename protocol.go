@@ -1,6 +1,7 @@
 package aep
 
 import (
+	"math"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -13,14 +14,16 @@ func ParseEnrollRequest(data []byte) (EnrollRequest, error) {
 	var value EnrollRequest
 	err := parseAndValidate(data, "Enroll request", &value, func() error {
 		return ValidateEnrollRequest(value)
-	}, "/claims")
+	}, "/claims", "/idempotency_key")
+	if err == nil {
+		err = rejectEmptyStringPaths(data, "Enroll request", "/idempotency_key")
+	}
 	return value, err
 }
 
 func ValidateEnrollRequest(value EnrollRequest) error {
 	issues := make([]ValidationIssue, 0)
 	requireNonEmpty(value.AgentDID, "$.agent_did", &issues)
-	requireNonEmpty(value.IdempotencyKey, "$.idempotency_key", &issues)
 	if value.Claims != nil {
 		appendValidationIssues(ValidateClaimValues(*value.Claims), &issues)
 	}
@@ -92,26 +95,26 @@ func ParseRevokeRequest(data []byte) (RevokeRequest, error) {
 	err := parseAndValidate(data, "Revoke request", &value, func() error {
 		return ValidateRevokeRequest(value)
 	}, "/grant_type", "/credential_id", "/all_grant_types")
+	if err == nil {
+		err = rejectEmptyStringPaths(data, "Revoke request", "/grant_type", "/credential_id", "/all_grant_types")
+	}
 	return value, err
 }
 
 func ValidateRevokeRequest(value RevokeRequest) error {
 	issues := make([]ValidationIssue, 0)
-	selectors := 0
-	if value.GrantType != "" {
-		selectors++
-	}
-	if value.CredentialID != "" {
-		selectors++
-	}
-	if value.AllGrantTypes != "" {
-		selectors++
+	hasAllGrantTypes := value.AllGrantTypes != ""
+	hasCredentialID := value.CredentialID != ""
+	hasGrantType := value.GrantType != ""
+	if hasAllGrantTypes {
 		if value.AllGrantTypes != "true" {
 			issues = append(issues, ValidationIssue{Path: "$.all_grant_types", Message: "Expected true."})
 		}
 	}
-	if selectors != 1 {
-		issues = append(issues, ValidationIssue{Path: "$", Message: "Expected exactly one of grant_type, credential_id, or all_grant_types."})
+	if (!hasAllGrantTypes && !hasGrantType) ||
+		(hasAllGrantTypes && (hasCredentialID || hasGrantType)) ||
+		(hasCredentialID && !hasGrantType) {
+		issues = append(issues, ValidationIssue{Path: "$", Message: "Expected grant_type, grant_type with credential_id, or all_grant_types."})
 	}
 	return validationResult("Revoke request", issues)
 }
@@ -166,7 +169,15 @@ func ValidateOpenAPIAEPSecurityScheme(value OpenAPIAEPSecurityScheme) error {
 	return validationResult("OpenAPI AEP security scheme", issues)
 }
 
+type ClientAssertionValidationOptions struct {
+	AllowInsecureLoopback bool
+}
+
 func ValidateClientAssertionClaims(value ClientAssertionClaims) error {
+	return ValidateClientAssertionClaimsWithOptions(value, ClientAssertionValidationOptions{})
+}
+
+func ValidateClientAssertionClaimsWithOptions(value ClientAssertionClaims, options ClientAssertionValidationOptions) error {
 	issues := make([]ValidationIssue, 0)
 	requireNonEmpty(value.Issuer, "$.iss", &issues)
 	requireNonEmpty(value.Subject, "$.sub", &issues)
@@ -181,7 +192,7 @@ func ValidateClientAssertionClaims(value ClientAssertionClaims) error {
 		issues = append(issues, ValidationIssue{Path: "$.op", Message: "Expected a registered assertion operation."})
 	}
 	if value.Operation == AssertionAuthenticate {
-		if !isProtectedResourceURI(value.Resource) {
+		if !isProtectedResourceURI(value.Resource, options.AllowInsecureLoopback) {
 			issues = append(issues, ValidationIssue{Path: "$.resource", Message: "Expected an HTTPS protected-resource URI without a fragment."})
 		}
 	} else if value.Resource != "" {
@@ -189,16 +200,25 @@ func ValidateClientAssertionClaims(value ClientAssertionClaims) error {
 	}
 	if value.ExpiresAt <= value.IssuedAt {
 		issues = append(issues, ValidationIssue{Path: "$.exp", Message: "Expected exp after iat."})
-	} else if time.Duration(value.ExpiresAt-value.IssuedAt)*time.Second > MaxAssertionLifetime {
+	} else if exceedsAssertionLifetime(value.IssuedAt, value.ExpiresAt) {
 		issues = append(issues, ValidationIssue{Path: "$.exp", Message: "Expected an assertion lifetime no greater than 300 seconds."})
 	}
 	return validationResult("client assertion claims", issues)
 }
 
+func exceedsAssertionLifetime(issuedAt int64, expiresAt int64) bool {
+	maxLifetimeSeconds := int64(MaxAssertionLifetime / time.Second)
+	return issuedAt <= math.MaxInt64-maxLifetimeSeconds && expiresAt > issuedAt+maxLifetimeSeconds
+}
+
 func ParseClientAssertionClaims(data []byte) (ClientAssertionClaims, error) {
+	return ParseClientAssertionClaimsWithOptions(data, ClientAssertionValidationOptions{})
+}
+
+func ParseClientAssertionClaimsWithOptions(data []byte, options ClientAssertionValidationOptions) (ClientAssertionClaims, error) {
 	var value ClientAssertionClaims
 	err := parseAndValidate(data, "client assertion claims", &value, func() error {
-		return ValidateClientAssertionClaims(value)
+		return ValidateClientAssertionClaimsWithOptions(value, options)
 	})
 	return value, err
 }
@@ -411,9 +431,15 @@ func validateStrings(values []string, path string, issues *[]ValidationIssue) {
 	}
 }
 
-func isProtectedResourceURI(value string) bool {
+func isProtectedResourceURI(value string, allowInsecureLoopback bool) bool {
 	parsed, err := url.Parse(value)
-	return err == nil && parsed.Scheme == "https" && parsed.Host != "" && parsed.Fragment == ""
+	if err != nil || parsed.Host == "" || parsed.Fragment != "" {
+		return false
+	}
+	if parsed.Scheme == "https" {
+		return true
+	}
+	return allowInsecureLoopback && parsed.Scheme == "http" && isLoopbackHost(parsed.Hostname())
 }
 
 func validateBodyHash(value *string, path string, issues *[]ValidationIssue) {

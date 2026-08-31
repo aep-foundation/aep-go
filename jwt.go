@@ -14,24 +14,26 @@ import (
 )
 
 type SignClientAssertionOptions struct {
-	Algorithm SigningAlgorithm
-	Key       any
-	KeyID     string
+	Algorithm             SigningAlgorithm
+	AllowInsecureLoopback bool
+	Key                   any
+	KeyID                 string
 }
 
 type ClientAssertionKeyResolver func(context.Context, jose.Header) (any, error)
 
 type VerifyClientAssertionOptions struct {
-	Algorithms     []SigningAlgorithm
-	Audience       string
-	ClockTolerance time.Duration
-	CurrentTime    time.Time
-	Issuer         string
-	Key            any
-	KeyResolver    ClientAssertionKeyResolver
-	Operation      AssertionOperation
-	Resource       string
-	Subject        string
+	Algorithms            []SigningAlgorithm
+	AllowInsecureLoopback bool
+	Audience              string
+	ClockTolerance        time.Duration
+	CurrentTime           time.Time
+	Issuer                string
+	Key                   any
+	KeyResolver           ClientAssertionKeyResolver
+	Operation             AssertionOperation
+	Resource              string
+	Subject               string
 }
 
 type DecodedJWT struct {
@@ -40,7 +42,7 @@ type DecodedJWT struct {
 }
 
 func SignClientAssertion(claims ClientAssertionClaims, options SignClientAssertionOptions) (string, error) {
-	if err := ValidateClientAssertionClaims(claims); err != nil {
+	if err := ValidateClientAssertionClaimsWithOptions(claims, ClientAssertionValidationOptions{AllowInsecureLoopback: options.AllowInsecureLoopback}); err != nil {
 		return "", err
 	}
 	algorithm, err := joseAlgorithm(options.Algorithm)
@@ -107,7 +109,7 @@ func VerifyClientAssertion(ctx context.Context, assertion string, options Verify
 	if err := token.Claims(key, &claims); err != nil {
 		return ClientAssertionClaims{}, fmt.Errorf("verify AEP client assertion: %w", err)
 	}
-	if err := ValidateClientAssertionClaims(claims); err != nil {
+	if err := ValidateClientAssertionClaimsWithOptions(claims, ClientAssertionValidationOptions{AllowInsecureLoopback: options.AllowInsecureLoopback}); err != nil {
 		return ClientAssertionClaims{}, err
 	}
 	if err := validateAssertionKeyID(header.KeyID, claims); err != nil {

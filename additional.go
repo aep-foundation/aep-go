@@ -1,12 +1,39 @@
 package aep
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
 	"strings"
 )
+
+func (value *GrantTypeConfig) UnmarshalJSON(data []byte) error {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return errors.New("AEP Grant Type configuration must be an object")
+	}
+	if err := rejectNullPaths(data, "AEP Grant Type configuration", "/supports_per_credential_revoke"); err != nil {
+		return err
+	}
+	if err := rejectEmptyStringPaths(data, "AEP Grant Type configuration", "/supports_per_credential_revoke"); err != nil {
+		return err
+	}
+	type plain GrantTypeConfig
+	var decoded plain
+	additional, err := decodeAdditional(data, &decoded)
+	if err != nil {
+		return err
+	}
+	*value = GrantTypeConfig(decoded)
+	value.Additional = additional
+	return nil
+}
+
+func (value GrantTypeConfig) MarshalJSON() ([]byte, error) {
+	type plain GrantTypeConfig
+	return encodeAdditional(plain(value), value.Additional)
+}
 
 func decodeAdditional(data []byte, known any) (AdditionalMembers, error) {
 	var object map[string]json.RawMessage

@@ -32,7 +32,12 @@ type InspectClaims struct {
 type Commands struct {
 	Supported        []Command                  `json:"supported"`
 	GrantTypes       []GrantType                `json:"grant_types,omitempty"`
-	GrantTypesConfig map[string]json.RawMessage `json:"grant_types_config,omitempty"`
+	GrantTypesConfig map[string]GrantTypeConfig `json:"grant_types_config,omitempty"`
+}
+
+type GrantTypeConfig struct {
+	SupportsPerCredentialRevoke string            `json:"supports_per_credential_revoke,omitempty"`
+	Additional                  AdditionalMembers `json:"-"`
 }
 
 type Core struct {
@@ -127,7 +132,7 @@ const (
 type EnrollRequest struct {
 	AgentDID       string            `json:"agent_did"`
 	Claims         *ClaimValues      `json:"claims,omitempty"`
-	IdempotencyKey string            `json:"idempotency_key"`
+	IdempotencyKey string            `json:"idempotency_key,omitempty"`
 	Additional     AdditionalMembers `json:"-"`
 }
 
@@ -191,13 +196,16 @@ type ClientAssertionClaims struct {
 type ErrorCode string
 
 const (
+	ErrorEnrollmentFailed                ErrorCode = "enrollment_failed"
 	ErrorInvalidRequest                  ErrorCode = "invalid_request"
 	ErrorNotRecognized                   ErrorCode = "not_recognized"
 	ErrorIdentitySuspended               ErrorCode = "identity_suspended"
 	ErrorIdentityTerminated              ErrorCode = "identity_terminated"
 	ErrorIdentityUnavailable             ErrorCode = "identity_unavailable"
 	ErrorVerificationPending             ErrorCode = "verification_pending"
+	ErrorVerificationTimeout             ErrorCode = "verification_timeout"
 	ErrorRequirementsUnmet               ErrorCode = "requirements_unmet"
+	ErrorRateLimited                     ErrorCode = "rate_limited"
 	ErrorUnsupportedGrantType            ErrorCode = "unsupported_grant_type"
 	ErrorIdempotencyConflict             ErrorCode = "idempotency_conflict"
 	ErrorAuthenticationRequired          ErrorCode = "authentication_required"
