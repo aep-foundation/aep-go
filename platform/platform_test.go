@@ -621,7 +621,7 @@ func testOptions(t *testing.T, hostedVerification bool) (Options, *testAuthorize
 		DIDHost:             "platform.example.com",
 		DIDURLTemplate:      "https://platform.example.com/agents/{agent_did_id}/did.json",
 		Discovery: DiscoveryOptions{
-			EndpointBase:               "/v1/aep/",
+			EndpointBase:               "/v1/aep",
 			HostedVerificationEndpoint: map[bool]string{true: "/v1/aep/verifications"}[hostedVerification],
 			LifecycleEndpoint:          "/v1/aep/agent-identities/{agent_identity_id}",
 			ListEndpoint:               "/v1/aep/agent-identities",
