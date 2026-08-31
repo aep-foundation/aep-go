@@ -50,8 +50,9 @@ packages. `agent` may compose `platform` for hosted identity workflows; `service
 of Agent behavior.
 
 Claims and credential wire types belong to `aep`. Agent presentation behavior belongs to `agent`;
-Service issuance and verification behavior belongs to `service`. Framework integrations remain
-outside the protocol core.
+Service issuance and verification behavior belongs to `service`. The Agent package includes a
+Platform-backed identity provider for hosted provisioning and delegated signing. Framework
+integrations remain outside the protocol core.
 
 ## Core
 

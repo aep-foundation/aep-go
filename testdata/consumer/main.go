@@ -7,12 +7,14 @@ import (
 	"time"
 
 	aep "github.com/aep-foundation/aep-go"
-	_ "github.com/aep-foundation/aep-go/agent"
+	"github.com/aep-foundation/aep-go/agent"
 	_ "github.com/aep-foundation/aep-go/platform"
 	"github.com/aep-foundation/aep-go/service"
 )
 
 func main() {
+	var _ agent.IdentityProvider = (*agent.PlatformIdentityProvider)(nil)
+	_ = agent.NewPlatformIdentityProvider
 	var _ http.Handler = (*service.HTTPHandler)(nil)
 	_ = service.NewHTTPHandler
 	_ = service.NewProtectedResourceMiddleware
