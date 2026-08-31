@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	aep "github.com/aep-foundation/aep-go"
@@ -12,6 +13,10 @@ import (
 )
 
 func main() {
+	var _ http.Handler = (*service.HTTPHandler)(nil)
+	_ = service.NewHTTPHandler
+	_ = service.NewProtectedResourceMiddleware
+	_, _ = service.PrincipalFromContext(context.Background())
 	_, err := service.StoredOAuthBearerGrantType(service.StoredCredentialGrantTypeOptions[aep.OAuthBearerGrantResponse]{
 		Issue: func(context.Context, aep.GrantRequest, service.GrantContext) (aep.OAuthBearerGrantResponse, error) {
 			return aep.OAuthBearerGrantResponse{
