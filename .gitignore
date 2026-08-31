@@ -1,5 +1,6 @@
 .DS_Store
 .conformance/
+.interop/
 bin/
 coverage.out
 *.test

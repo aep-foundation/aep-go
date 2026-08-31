@@ -588,11 +588,20 @@ func validatePlatformAgentIdentity(identity platform.AgentIdentity, allowInsecur
 	if err != nil || documentURL.Host == "" || (documentURL.Scheme != "https" && !(allowInsecureLoopback && documentURL.Scheme == "http" && isLoopback(documentURL.Hostname()))) {
 		return errors.New("AEP Platform returned an invalid DID document URL")
 	}
-	expected, err := aep.DIDWebDocumentURLWithOptions(identity.AgentDID, aep.DIDWebDocumentURLOptions{AllowInsecureLoopback: allowInsecureLoopback})
-	if err != nil || expected.String() != documentURL.String() {
+	expected, err := aep.DIDWebDocumentURL(identity.AgentDID)
+	if err != nil {
 		return errors.New("AEP Platform DID document URL does not match the Agent DID")
 	}
-	return nil
+	if expected.String() == documentURL.String() {
+		return nil
+	}
+	if allowInsecureLoopback {
+		loopback, loopbackErr := aep.DIDWebDocumentURLWithOptions(identity.AgentDID, aep.DIDWebDocumentURLOptions{AllowInsecureLoopback: true})
+		if loopbackErr == nil && loopback.String() == documentURL.String() {
+			return nil
+		}
+	}
+	return errors.New("AEP Platform DID document URL does not match the Agent DID")
 }
 
 func validatePlatformIdentityList(list platform.AgentIdentityListResponse, allowInsecureLoopback bool) error {

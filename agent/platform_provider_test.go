@@ -184,6 +184,18 @@ func TestPlatformIdentityProviderEncodesOpaqueIdentityID(t *testing.T) {
 	}
 }
 
+func TestPlatformIdentityProviderAcceptsCanonicalLoopbackDIDURL(t *testing.T) {
+	provider, err := NewPlatformIdentityProvider(PlatformIdentityProviderOptions{AllowInsecureLoopback: true, PlatformURL: "http://127.0.0.1:4100"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := platformIdentity("http://127.0.0.1:4100")
+	identity.DIDDocumentURL = "https://127.0.0.1:4100/agents/one/did.json"
+	if _, err := provider.serviceIdentity(identity); err != nil {
+		t.Fatalf("canonical loopback DID URL was rejected: %v", err)
+	}
+}
+
 func TestPlatformIdentityProviderReturnsTypedPendingError(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {

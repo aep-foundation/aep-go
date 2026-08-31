@@ -1,4 +1,4 @@
-.PHONY: conformance consumer-smoke examples format format-check test tidy-check verify
+.PHONY: conformance consumer-smoke examples format format-check interoperability test tidy-check verify
 
 conformance:
 	./scripts/run-conformance.sh
@@ -14,6 +14,9 @@ format:
 
 format-check:
 	test -z "$$(gofmt -l .)"
+
+interoperability:
+	./scripts/run-node-interoperability.sh
 
 test:
 	go test -race -coverprofile=coverage.out ./...
