@@ -1,0 +1,119 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Stable semantic version without the v prefix
+        required: true
+        type: string
+
+concurrency:
+  group: aep-go-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+              echo "Manual releases must run from main." >&2
+              exit 1
+            fi
+            tag="v$INPUT_VERSION"
+            if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+              echo "Tag $tag already exists." >&2
+              exit 1
+            fi
+          else
+            tag="$GITHUB_REF_NAME"
+          fi
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Version must be a stable semantic version such as v0.1.0." >&2
+            exit 1
+          fi
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists." >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Check out AEP specifications
+        uses: actions/checkout@v7
+        with:
+          repository: aep-foundation/aep-specs
+          path: .conformance/aep-specs
+
+      - name: Check out AEP Node.js
+        uses: actions/checkout@v7
+        with:
+          repository: aep-foundation/aep-node
+          path: .interop/aep-node
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: 1.26.x
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+          working-directory: .conformance/aep-specs/ietf
+
+      - run: corepack enable
+
+      - name: Install Node.js dependencies
+        working-directory: .interop/aep-node
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify release
+        run: make verify consumer-smoke conformance interoperability
+        env:
+          AEP_GO_VERSION: ${{ steps.release.outputs.tag }}
+          AEP_INTEROP_OUTPUT_DIR: .interop/reports
+          AEP_NODE_DIR: .interop/aep-node
+          AEP_SPECS_DIR: .conformance/aep-specs
+
+      - name: Create tag
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag --annotate "$TAG" --message "AEP Go $TAG" "$GITHUB_SHA"
+          git push origin "$TAG"
+
+      - name: Publish GitHub release
+        run: >-
+          gh release create "${{ steps.release.outputs.tag }}"
+          .conformance/reports/agent.json#aep-go-agent-conformance.json
+          .conformance/reports/platform.json#aep-go-platform-conformance.json
+          .conformance/reports/service.json#aep-go-service-conformance.json
+          .interop/reports/aep-go-node-interoperability.json#aep-go-node-interoperability.json
+          --generate-notes
+          --title "AEP Go ${{ steps.release.outputs.tag }}"
+          --verify-tag
+        env:
+          GH_TOKEN: ${{ github.token }}
