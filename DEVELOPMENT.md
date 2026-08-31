@@ -57,5 +57,10 @@ Set `AEP_NODE_DIR` when the Node.js repository is elsewhere. The report is writt
 ## Releases
 
 Stable Go module releases use semantic-version tags such as `v0.1.0` and matching GitHub releases.
-Release configuration, conformance evidence, interoperability, and clean external consumption are
-verified before the first public version is published.
+Versions follow semantic versioning and are not required to remain in lockstep with other AEP
+development kits.
+
+Run the `Release` workflow from `main` and provide the version without the `v` prefix. The workflow
+verifies the repository, clean external consumption, shared Agent, Service, and Platform
+conformance, and bidirectional Node.js interoperability before creating an annotated tag and
+GitHub release. The conformance reports and interoperability report are attached to the release.
