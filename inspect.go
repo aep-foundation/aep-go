@@ -46,6 +46,9 @@ func ValidateInspectDocument(document InspectDocument) error {
 	if !contains(document.Commands.Supported, CommandInspect) {
 		issues = append(issues, ValidationIssue{Path: "$.commands.supported", Message: "Expected inspect to be advertised."})
 	}
+	if contains(document.Commands.Supported, Command(AssertionAuthenticate)) {
+		issues = append(issues, ValidationIssue{Path: "$.commands.supported", Message: "authenticate is an assertion operation, not a command."})
+	}
 	validateAdvertisements(document.Commands.GrantTypes, "$.commands.grant_types", false, &issues)
 	validateGrantTypeConfigs(document.Commands.GrantTypesConfig, document.Commands.GrantTypes, &issues)
 	if (contains(document.Commands.Supported, CommandGrant) || contains(document.Commands.Supported, CommandRevoke)) && len(document.Commands.GrantTypes) == 0 {

@@ -79,7 +79,10 @@ func evaluateShared(request adapterRequest) (bool, bool, error) {
 	case "not-recognized-problem", "requirements-unmet-problem", "verification-pending-problem":
 		passed, err := evaluateExpectedBody(request, aep.ParseProblemDetails)
 		return true, passed, err
-	case "authenticated-command-without-identity-method", "authentication-method-limit", "command-without-inspect",
+	case "problem-details-validation":
+		passed, err := evaluateProblemDetailsValidation(request)
+		return true, passed, err
+	case "authenticate-command-prohibited", "authenticated-command-without-identity-method", "authentication-method-limit", "command-without-inspect",
 		"forward-compatible-advertisements", "grant-without-grant-types", "invalid-advertisement-identifiers",
 		"invalid-openapi-reference", "missing-signing-algorithm":
 		passed, err := parseValidity(request, "document", func(data []byte) error {
@@ -119,6 +122,24 @@ func evaluateShared(request adapterRequest) (bool, bool, error) {
 		return true, passed, err
 	}
 	return false, false, nil
+}
+
+func evaluateProblemDetailsValidation(request adapterRequest) (bool, error) {
+	type problemCase struct {
+		Body  json.RawMessage `json:"body"`
+		Valid bool            `json:"valid"`
+	}
+	cases, err := requiredField[[]problemCase](request.Case.Input, "cases")
+	if err != nil {
+		return false, err
+	}
+	for _, item := range cases {
+		_, parseErr := aep.ParseProblemDetails(item.Body)
+		if (parseErr == nil) != item.Valid {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func evaluateClaimCatalog(request adapterRequest) (bool, error) {
