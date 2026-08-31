@@ -1,7 +1,10 @@
-.PHONY: consumer-smoke format format-check test tidy-check verify
+.PHONY: consumer-smoke examples format format-check test tidy-check verify
 
 consumer-smoke:
 	./scripts/verify-consumer.sh
+
+examples:
+	go build ./examples/...
 
 format:
 	gofmt -w $$(find . -name '*.go' -not -path './.git/*')
@@ -16,6 +19,6 @@ tidy-check:
 	go mod tidy
 	git diff --exit-code -- go.mod go.sum
 
-verify: format-check tidy-check
+verify: examples format-check tidy-check
 	go vet ./...
 	go test -race -coverprofile=coverage.out ./...
