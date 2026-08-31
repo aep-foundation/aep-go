@@ -80,6 +80,13 @@ type EnrollmentPolicy interface {
 	DecideEnrollment(context.Context, aep.EnrollRequest, EnrollmentPolicyContext) (EnrollmentDecision, error)
 }
 
+type ClaimValueLimits struct {
+	MaxEncodedBytes int
+	MaxMemberCount  int
+	MaxObjectDepth  int
+	MaxStringLength int
+}
+
 type IdempotentCommand string
 
 const (
@@ -124,12 +131,14 @@ type GrantContext struct {
 	AgentDID   string
 	Enrollment EnrollmentRecord
 	GrantType  aep.GrantType
+	Now        time.Time
 }
 
 type RevokeContext struct {
 	AgentDID   string
 	Enrollment EnrollmentRecord
 	GrantType  aep.GrantType
+	Now        time.Time
 }
 
 type CredentialAuthenticationInput struct {
@@ -174,6 +183,39 @@ type GrantTypeDefinition struct {
 	Handler   GrantTypeHandler
 }
 
+type ServiceCredentialRecord struct {
+	AgentDID     string
+	CreatedAt    time.Time
+	Credential   aep.BuiltInGrantResponse
+	CredentialID string
+	ExpiresAt    time.Time
+	GrantType    aep.GrantType
+}
+
+type CredentialMatch struct {
+	AgentDID     string
+	CredentialID string
+	ExpiresAt    time.Time
+	GrantType    aep.GrantType
+	Scopes       []string
+}
+
+type ServiceCredentialStore interface {
+	AuthenticateCredential(context.Context, aep.GrantType, CredentialAuthenticationInput) (*CredentialMatch, error)
+	HasCredentialPresentation(context.Context, aep.GrantType, CredentialAuthenticationInput) (bool, error)
+	RevokeCredential(context.Context, string, aep.GrantType, string, time.Time) error
+	RevokeGrantType(context.Context, string, aep.GrantType, time.Time) error
+	SaveCredential(context.Context, ServiceCredentialRecord) error
+}
+
+type BuiltInCredentialIssuer[Credential aep.BuiltInGrantResponse] func(context.Context, aep.GrantRequest, GrantContext) (Credential, error)
+
+type StoredCredentialGrantTypeOptions[Credential aep.BuiltInGrantResponse] struct {
+	Config aep.GrantTypeConfig
+	Issue  BuiltInCredentialIssuer[Credential]
+	Store  ServiceCredentialStore
+}
+
 type ProtectedResourceRequest struct {
 	Headers http.Header
 	Method  string
@@ -208,6 +250,7 @@ type clientAssertionOptions struct {
 type Options struct {
 	AuthenticationMethods []aep.AuthenticationMethod
 	ClientAssertion       ClientAssertionOptions
+	ClaimValueLimits      *ClaimValueLimits
 	Clock                 func() time.Time
 	Claims                *aep.InspectClaims
 	EndpointBase          string
@@ -229,6 +272,7 @@ type Options struct {
 type Service struct {
 	authenticationMethods []aep.AuthenticationMethod
 	clientAssertion       clientAssertionOptions
+	claimValueLimits      ClaimValueLimits
 	clock                 func() time.Time
 	document              aep.InspectDocument
 	enrollmentPolicy      EnrollmentPolicy

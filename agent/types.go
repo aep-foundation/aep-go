@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -200,6 +201,18 @@ type EnrollmentStateError struct {
 
 func (err *EnrollmentStateError) Error() string {
 	return "AEP Agent identity did not become active: " + string(err.Status)
+}
+
+type ClaimRequirementsError struct {
+	MissingRequiredClaimNames []aep.ClaimName
+}
+
+func (err *ClaimRequirementsError) Error() string {
+	names := make([]string, len(err.MissingRequiredClaimNames))
+	for index, name := range err.MissingRequiredClaimNames {
+		names[index] = string(name)
+	}
+	return "AEP Agent cannot satisfy the Service's required Claim Names: " + strings.Join(names, ", ")
 }
 
 type InspectErrorCode string
