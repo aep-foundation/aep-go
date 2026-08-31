@@ -20,7 +20,7 @@ func ParseInspectDocument(data []byte) (InspectDocument, error) {
 	if err := decodeOne(data, &document); err != nil {
 		return InspectDocument{}, wrapDecodeError("Inspect document", err)
 	}
-	if err := rejectNullPaths(data, "Inspect document", "/authentication", "/claims", "/extensions", "/http/openapi"); err != nil {
+	if err := rejectNullPaths(data, "Inspect document", "/authentication", "/claims", "/commands/grant_types_config", "/extensions", "/http/openapi"); err != nil {
 		return InspectDocument{}, err
 	}
 	if err := ValidateInspectDocument(document); err != nil {
@@ -47,6 +47,7 @@ func ValidateInspectDocument(document InspectDocument) error {
 		issues = append(issues, ValidationIssue{Path: "$.commands.supported", Message: "Expected inspect to be advertised."})
 	}
 	validateAdvertisements(document.Commands.GrantTypes, "$.commands.grant_types", false, &issues)
+	validateGrantTypeConfigs(document.Commands.GrantTypesConfig, document.Commands.GrantTypes, &issues)
 	if (contains(document.Commands.Supported, CommandGrant) || contains(document.Commands.Supported, CommandRevoke)) && len(document.Commands.GrantTypes) == 0 {
 		issues = append(issues, ValidationIssue{Path: "$.commands.grant_types", Message: "Expected at least one grant type when Grant or Revoke is advertised."})
 	}
@@ -66,6 +67,21 @@ func ValidateInspectDocument(document InspectDocument) error {
 		issues = append(issues, ValidationIssue{Path: "$.service.did", Message: "Expected a DID."})
 	}
 	return validationResult("Inspect document", issues)
+}
+
+func validateGrantTypeConfigs(configs map[string]GrantTypeConfig, grantTypes []GrantType, issues *[]ValidationIssue) {
+	for name, config := range configs {
+		path := "$.commands.grant_types_config." + name
+		if !advertisementPattern.MatchString(name) {
+			*issues = append(*issues, ValidationIssue{Path: path, Message: "Expected a lowercase grant-type identifier."})
+		}
+		if !contains(grantTypes, GrantType(name)) {
+			*issues = append(*issues, ValidationIssue{Path: path, Message: "Expected configuration for an advertised grant type."})
+		}
+		if value := config.SupportsPerCredentialRevoke; value != "" && value != "false" && value != "true" {
+			*issues = append(*issues, ValidationIssue{Path: path + ".supports_per_credential_revoke", Message: "Expected false or true."})
+		}
+	}
 }
 
 func IsVersionCompatible(received string, supported string) bool {

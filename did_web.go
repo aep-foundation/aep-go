@@ -20,12 +20,25 @@ type HTTPDoer interface {
 }
 
 type ResolveDIDWebPublicKeyOptions struct {
-	Client HTTPDoer
-	DID    string
-	KeyID  string
+	AllowInsecureLoopback bool
+	Client                HTTPDoer
+	DID                   string
+	KeyID                 string
+}
+
+type DIDWebDocumentURLOptions struct {
+	AllowInsecureLoopback bool
 }
 
 func DIDWebDocumentURL(did string) (*url.URL, error) {
+	return didWebDocumentURL(did, false)
+}
+
+func DIDWebDocumentURLWithOptions(did string, options DIDWebDocumentURLOptions) (*url.URL, error) {
+	return didWebDocumentURL(did, options.AllowInsecureLoopback)
+}
+
+func didWebDocumentURL(did string, allowInsecureLoopback bool) (*url.URL, error) {
 	const prefix = "did:web:"
 	if !strings.HasPrefix(did, prefix) {
 		return nil, fmt.Errorf("unsupported DID method: %s", did)
@@ -43,8 +56,7 @@ func DIDWebDocumentURL(did string) (*url.URL, error) {
 		return nil, fmt.Errorf("invalid did:web host: %s", host)
 	}
 	scheme := "https"
-	hostname := parsedHost.Hostname()
-	if hostname == "localhost" || hostname == "127.0.0.1" || hostname == "[::1]" {
+	if allowInsecureLoopback && isLoopbackHost(parsedHost.Hostname()) {
 		scheme = "http"
 	}
 	path := "/.well-known/did.json"
@@ -63,7 +75,14 @@ func DIDWebDocumentURL(did string) (*url.URL, error) {
 }
 
 func ResolveDIDWebPublicKey(ctx context.Context, options ResolveDIDWebPublicKeyOptions) (jose.JSONWebKey, error) {
-	documentURL, err := DIDWebDocumentURL(options.DID)
+	if options.KeyID == "" {
+		return jose.JSONWebKey{}, errors.New("AEP did:web key ID is required")
+	}
+	keyDID, _, _ := strings.Cut(options.KeyID, "#")
+	if keyDID != options.DID {
+		return jose.JSONWebKey{}, errors.New("AEP did:web key ID does not identify the assertion issuer")
+	}
+	documentURL, err := didWebDocumentURL(options.DID, options.AllowInsecureLoopback)
 	if err != nil {
 		return jose.JSONWebKey{}, err
 	}
@@ -76,11 +95,21 @@ func ResolveDIDWebPublicKey(ctx context.Context, options ResolveDIDWebPublicKeyO
 	if client == nil {
 		client = http.DefaultClient
 	}
+	if httpClient, ok := client.(*http.Client); ok {
+		redirectSafeClient := *httpClient
+		redirectSafeClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+		client = &redirectSafeClient
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		return jose.JSONWebKey{}, fmt.Errorf("fetch did:web document: %w", err)
 	}
 	defer response.Body.Close()
+	if response.Request == nil || response.Request.URL == nil || response.Request.URL.String() != documentURL.String() {
+		return jose.JSONWebKey{}, errors.New("did:web document redirects are not allowed")
+	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return jose.JSONWebKey{}, fmt.Errorf("fetch did:web document: HTTP %d", response.StatusCode)
 	}
@@ -101,7 +130,7 @@ func ResolveDIDWebPublicKey(ctx context.Context, options ResolveDIDWebPublicKeyO
 		return jose.JSONWebKey{}, fmt.Errorf("decode did:web document: %w", err)
 	}
 	for _, method := range document.VerificationMethods {
-		if options.KeyID != "" && method.ID != options.KeyID {
+		if method.ID != options.KeyID {
 			continue
 		}
 		if len(method.PublicKeyJWK) == 0 {
@@ -116,9 +145,9 @@ func ResolveDIDWebPublicKey(ctx context.Context, options ResolveDIDWebPublicKeyO
 		}
 		return key, nil
 	}
-	identifier := options.DID
-	if options.KeyID != "" {
-		identifier = options.KeyID
-	}
-	return jose.JSONWebKey{}, fmt.Errorf("no public JWK found for %s", identifier)
+	return jose.JSONWebKey{}, fmt.Errorf("no public JWK found for %s", options.KeyID)
+}
+
+func isLoopbackHost(hostname string) bool {
+	return hostname == "localhost" || hostname == "127.0.0.1" || hostname == "::1"
 }

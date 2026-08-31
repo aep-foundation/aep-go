@@ -52,6 +52,26 @@ func rejectNullPaths(data []byte, documentType string, paths ...string) error {
 	return validationResult(documentType, issues)
 }
 
+func rejectEmptyStringPaths(data []byte, documentType string, paths ...string) error {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(data, &object); err != nil {
+		return nil
+	}
+	issues := make([]ValidationIssue, 0)
+	for _, path := range paths {
+		name := strings.TrimPrefix(path, "/")
+		raw, present := object[name]
+		if !present {
+			continue
+		}
+		var value string
+		if err := json.Unmarshal(raw, &value); err == nil && value == "" {
+			issues = append(issues, ValidationIssue{Path: "$." + name, Message: "Expected a non-empty string."})
+		}
+	}
+	return validationResult(documentType, issues)
+}
+
 func validationResult(documentType string, issues []ValidationIssue) error {
 	if len(issues) == 0 {
 		return nil

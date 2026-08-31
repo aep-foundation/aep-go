@@ -60,17 +60,33 @@ func TestInspectDocumentRelationships(t *testing.T) {
 	valid.Authentication = &Authentication{Methods: []AuthenticationMethod{
 		AuthenticationMethodJWT, "oauth-bearer", "api-key", "basic",
 	}}
+	valid.Commands.GrantTypesConfig = map[string]GrantTypeConfig{
+		"oauth-bearer": {
+			SupportsPerCredentialRevoke: "true",
+			Additional: AdditionalMembers{
+				"future": json.RawMessage("true"),
+			},
+		},
+	}
 	valid.HTTP.OpenAPI = &OpenAPIReference{
 		URL: "/openapi.json", PathMatching: OpenAPIPathMatching{TrailingSlash: "strict"},
 	}
 	if err := ValidateInspectDocument(valid); err != nil {
 		t.Fatalf("valid Inspect document: %v", err)
 	}
+	encoded, err := json.Marshal(valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := ParseInspectDocument(encoded)
+	if err != nil || parsed.Commands.GrantTypesConfig["oauth-bearer"].Additional["future"] == nil {
+		t.Fatalf("unexpected Grant Type configuration round trip: %#v, %v", parsed.Commands.GrantTypesConfig, err)
+	}
 
 	document := minimalInspectDocument()
 	document.Identity.Methods = nil
 	document.Commands.GrantTypes = nil
-	err := ValidateInspectDocument(document)
+	err = ValidateInspectDocument(document)
 	var validation *ValidationError
 	if !errors.As(err, &validation) {
 		t.Fatalf("expected ValidationError, got %v", err)
@@ -93,6 +109,18 @@ func TestInspectDocumentRelationships(t *testing.T) {
 	}
 	assertIssue(t, validation.Issues, "$.authentication.future")
 	assertIssue(t, validation.Issues, "$.http.openapi.path_matching.future")
+
+	document = minimalInspectDocument()
+	document.Commands.GrantTypesConfig = map[string]GrantTypeConfig{
+		"future":       {SupportsPerCredentialRevoke: "true"},
+		"oauth-bearer": {SupportsPerCredentialRevoke: "yes"},
+	}
+	err = ValidateInspectDocument(document)
+	if !errors.As(err, &validation) {
+		t.Fatalf("expected ValidationError, got %v", err)
+	}
+	assertIssue(t, validation.Issues, "$.commands.grant_types_config.future")
+	assertIssue(t, validation.Issues, "$.commands.grant_types_config.oauth-bearer.supports_per_credential_revoke")
 }
 
 func TestInspectRejectsNullOptionalObject(t *testing.T) {
@@ -111,6 +139,36 @@ func TestInspectRejectsNullOptionalObject(t *testing.T) {
 	}
 	if _, err := ParseInspectDocument(data); err == nil {
 		t.Fatal("expected null claims to fail")
+	}
+	object["claims"] = map[string]any{"required": []string{"contact.email"}}
+	commands := object["commands"].(map[string]any)
+	commands["grant_types_config"] = nil
+	data, err = json.Marshal(object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseInspectDocument(data); err == nil {
+		t.Fatal("expected null Grant Type configuration to fail")
+	}
+	commands["grant_types_config"] = map[string]any{"oauth-bearer": nil}
+	data, err = json.Marshal(object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseInspectDocument(data); err == nil {
+		t.Fatal("expected null Grant Type configuration member to fail")
+	}
+	for _, value := range []any{nil, ""} {
+		commands["grant_types_config"] = map[string]any{
+			"oauth-bearer": map[string]any{"supports_per_credential_revoke": value},
+		}
+		data, err = json.Marshal(object)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ParseInspectDocument(data); err == nil {
+			t.Fatalf("expected invalid supports_per_credential_revoke value %#v to fail", value)
+		}
 	}
 }
 

@@ -7,9 +7,11 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,8 +24,15 @@ func TestDIDWebDocumentURL(t *testing.T) {
 		t.Fatalf("unexpected root URL: %v, %v", root, err)
 	}
 	path, err := DIDWebDocumentURL("did:web:127.0.0.1%3A4100:agents:example-agent")
-	if err != nil || path.String() != "http://127.0.0.1:4100/agents/example-agent/did.json" {
+	if err != nil || path.String() != "https://127.0.0.1:4100/agents/example-agent/did.json" {
 		t.Fatalf("unexpected path URL: %v, %v", path, err)
+	}
+	loopback, err := DIDWebDocumentURLWithOptions(
+		"did:web:127.0.0.1%3A4100:agents:example-agent",
+		DIDWebDocumentURLOptions{AllowInsecureLoopback: true},
+	)
+	if err != nil || loopback.String() != "http://127.0.0.1:4100/agents/example-agent/did.json" {
+		t.Fatalf("unexpected loopback URL: %v, %v", loopback, err)
 	}
 }
 
@@ -33,6 +42,7 @@ func TestResolveDIDWebPublicKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	jwk := jose.JSONWebKey{Key: publicKey, KeyID: "key-1", Algorithm: string(jose.EdDSA), Use: "sig"}
+	var did string
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/agents/123/did.json" {
 			t.Errorf("unexpected DID path: %s", request.URL.Path)
@@ -40,18 +50,51 @@ func TestResolveDIDWebPublicKey(t *testing.T) {
 		response.Header().Set("Content-Type", "application/did+json")
 		_ = json.NewEncoder(response).Encode(map[string]any{
 			"verificationMethod": []any{map[string]any{
-				"id": "did:web:agent#key-1", "publicKeyJwk": jwk,
+				"id": did + "#key-1", "publicKeyJwk": jwk,
 			}},
 		})
 	}))
 	defer server.Close()
 	didHost := strings.TrimPrefix(server.URL, "http://")
-	did := "did:web:" + strings.ReplaceAll(didHost, ":", "%3A") + ":agents:123"
+	did = "did:web:" + strings.ReplaceAll(didHost, ":", "%3A") + ":agents:123"
 	resolved, err := ResolveDIDWebPublicKey(context.Background(), ResolveDIDWebPublicKeyOptions{
-		Client: server.Client(), DID: did, KeyID: "did:web:agent#key-1",
+		AllowInsecureLoopback: true,
+		Client:                server.Client(),
+		DID:                   did,
+		KeyID:                 did + "#key-1",
 	})
 	if err != nil || !resolved.Valid() {
 		t.Fatalf("unexpected resolved key: %#v, %v", resolved, err)
+	}
+	if _, err := ResolveDIDWebPublicKey(context.Background(), ResolveDIDWebPublicKeyOptions{DID: did}); err == nil {
+		t.Fatal("missing did:web key ID was accepted")
+	}
+	if _, err := ResolveDIDWebPublicKey(context.Background(), ResolveDIDWebPublicKeyOptions{
+		DID: did, KeyID: "did:web:different.example.com#key-1",
+	}); err == nil {
+		t.Fatal("mismatched did:web key ID was accepted")
+	}
+}
+
+func TestResolveDIDWebPublicKeyRejectsRedirect(t *testing.T) {
+	var targetCalled atomic.Bool
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		targetCalled.Store(true)
+	}))
+	defer target.Close()
+	redirect := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		http.Redirect(response, request, target.URL, http.StatusFound)
+	}))
+	defer redirect.Close()
+	host := strings.TrimPrefix(redirect.URL, "https://")
+	did := "did:web:" + strings.ReplaceAll(host, ":", "%3A")
+	if _, err := ResolveDIDWebPublicKey(context.Background(), ResolveDIDWebPublicKeyOptions{
+		Client: redirect.Client(), DID: did, KeyID: did + "#key-1",
+	}); err == nil {
+		t.Fatal("did:web redirect was accepted")
+	}
+	if targetCalled.Load() {
+		t.Fatal("did:web redirect target was requested")
 	}
 }
 
@@ -163,5 +206,62 @@ func TestInvalidIdentityInputs(t *testing.T) {
 	}
 	if _, err := SignClientAssertion(claims, SignClientAssertionOptions{Algorithm: SigningAlgorithmEdDSA, Key: privateKey}); err == nil {
 		t.Fatal("missing kid was accepted")
+	}
+}
+
+func TestClientAssertionLoopbackResource(t *testing.T) {
+	claims := ClientAssertionClaims{
+		Audience: "did:web:127.0.0.1%3A4100", ExpiresAt: 61, IssuedAt: 1,
+		Issuer: "did:web:agent.example", JWTID: "jti", Operation: AssertionAuthenticate,
+		Resource: "http://127.0.0.1:4100/private", Subject: "did:web:agent.example",
+	}
+	if err := ValidateClientAssertionClaims(claims); err == nil {
+		t.Fatal("plaintext loopback resource was accepted by default")
+	}
+	if err := ValidateClientAssertionClaimsWithOptions(claims, ClientAssertionValidationOptions{AllowInsecureLoopback: true}); err != nil {
+		t.Fatalf("explicit plaintext loopback resource was rejected: %v", err)
+	}
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertion, err := SignClientAssertion(claims, SignClientAssertionOptions{
+		Algorithm:             SigningAlgorithmEdDSA,
+		AllowInsecureLoopback: true,
+		Key:                   privateKey,
+		KeyID:                 claims.Issuer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyClientAssertion(context.Background(), assertion, VerifyClientAssertionOptions{
+		Algorithms:            []SigningAlgorithm{SigningAlgorithmEdDSA},
+		AllowInsecureLoopback: true,
+		Audience:              claims.Audience,
+		CurrentTime:           time.Unix(30, 0),
+		Key:                   publicKey,
+		Operation:             claims.Operation,
+		Resource:              claims.Resource,
+	}); err != nil {
+		t.Fatalf("explicit plaintext loopback assertion was rejected: %v", err)
+	}
+	claims.Resource = "http://api.example.com/private"
+	if err := ValidateClientAssertionClaimsWithOptions(claims, ClientAssertionValidationOptions{AllowInsecureLoopback: true}); err == nil {
+		t.Fatal("non-loopback plaintext resource was accepted")
+	}
+}
+
+func TestClientAssertionLifetimeDoesNotOverflow(t *testing.T) {
+	claims := ClientAssertionClaims{
+		Audience: "did:web:service.example", ExpiresAt: math.MaxInt64, IssuedAt: math.MinInt64,
+		Issuer: "did:web:agent.example", JWTID: "jti", Operation: AssertionEnroll,
+		Subject: "did:web:agent.example",
+	}
+	if err := ValidateClientAssertionClaims(claims); err == nil {
+		t.Fatal("overflowing client assertion lifetime was accepted")
+	}
+	claims.IssuedAt = math.MaxInt64 - 300
+	if err := ValidateClientAssertionClaims(claims); err != nil {
+		t.Fatalf("valid upper-bound client assertion lifetime was rejected: %v", err)
 	}
 }
