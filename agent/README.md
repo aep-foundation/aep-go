@@ -24,6 +24,38 @@ if err != nil {
 
 The default identity, credential, Inspect-cache, and idempotency components are in-memory implementations. Pass durable stores when identities or issued credentials must survive process restarts.
 
+## Use a hosted identity Platform
+
+`NewPlatformIdentityProvider` discovers a Platform, recovers or provisions a Service-scoped Agent
+identity, and delegates assertion signing. Platform API authentication is application-specific.
+
+```go
+identities, err := agent.NewPlatformIdentityProvider(agent.PlatformIdentityProviderOptions{
+	Authorization: "Bearer platform-api-token",
+	PlatformURL:   "https://platform.example",
+	PendingSignResolver: func(ctx context.Context, pending agent.PlatformPendingSign) (map[string]json.RawMessage, error) {
+		timer := time.NewTimer(time.Duration(pending.RetryAfterSeconds) * time.Second)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timer.C:
+			return pending.PlatformContext, nil
+		}
+	},
+})
+if err != nil {
+	return err
+}
+
+client, err := agent.New(agent.Options{IdentityProvider: identities})
+```
+
+When delegated signing returns `202 Accepted`, the resolver controls waiting and supplies the opaque
+Platform context for the next Sign request. Without a resolver, signing returns a
+`PlatformSignPendingError`. Applications operating a Platform remain responsible for mapping the
+Platform engine to their authenticated HTTP routes.
+
 ## Enroll
 
 Inspect before collecting Claims so the application can explain what the Service requires. `Enroll` also checks the provided Claim Values against the advertised required Claim Names.
