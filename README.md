@@ -60,6 +60,7 @@ The root package provides the AEP wire contract without a runtime JSON Schema en
 - Inspect, Claims, command, credential, and Problem Details models
 - bounded native validation with stable issue paths
 - HTTP command paths and protected-resource authorization carriers
+- OpenAPI URL resolution and operation path matching
 - `did:web` document and public-key resolution
 - EdDSA and ES256 client assertion signing and verification
 - protocol limits for assertion lifetime, clock skew, caching, and idempotency
@@ -98,6 +99,17 @@ make examples
 The examples use ephemeral in-memory stores and local key custody. The role guides identify the
 interfaces that production applications must replace.
 
+## Conformance
+
+Run the shared Agent, Service, and Platform conformance suites against the public Go APIs:
+
+```sh
+make conformance
+```
+
+The command reads the adjacent `../aep-specs` checkout by default and writes role reports to
+`.conformance/reports/`. Set `AEP_SPECS_DIR` when the specifications are checked out elsewhere.
+
 ## Development
 
 Go 1.26 or newer is required. Run the complete merge gate with:
@@ -105,6 +117,7 @@ Go 1.26 or newer is required. Run the complete merge gate with:
 ```sh
 make verify
 make consumer-smoke
+make conformance
 ```
 
 See [DEVELOPMENT.md](./DEVELOPMENT.md) for the contributor workflow and

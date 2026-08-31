@@ -20,8 +20,8 @@ const (
 )
 
 func createDiscoveryDocument(options Options, defaultLifetime time.Duration) (DiscoveryDocument, error) {
-	endpointBase, err := aep.NormalizeEndpointBase(options.Discovery.EndpointBase)
-	if err != nil {
+	endpointBase := options.Discovery.EndpointBase
+	if err := validateEndpointPath("endpoint base", endpointBase); err != nil {
 		return DiscoveryDocument{}, err
 	}
 	endpoints := DiscoveryEndpoints{

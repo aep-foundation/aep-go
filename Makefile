@@ -1,4 +1,7 @@
-.PHONY: consumer-smoke examples format format-check test tidy-check verify
+.PHONY: conformance consumer-smoke examples format format-check test tidy-check verify
+
+conformance:
+	./scripts/run-conformance.sh
 
 consumer-smoke:
 	./scripts/verify-consumer.sh
