@@ -11,11 +11,11 @@ Service-issued credentials, and authenticated Agent access.
 
 ## Start here
 
-| Goal                                               | Package    |
-| -------------------------------------------------- | ---------- |
-| Inspect, enroll with, and authenticate to Services | `agent`    |
-| Integrate enrollment into a Service                | `service`  |
-| Host managed Agent identities                      | `platform` |
+| Goal                                               | Package                               |
+| -------------------------------------------------- | ------------------------------------- |
+| Inspect, enroll with, and authenticate to Services | [`agent`](./agent/README.md)       |
+| Integrate enrollment into a Service                | [`service`](./service/README.md)   |
+| Host managed Agent identities                      | [`platform`](./platform/README.md) |
 | Use protocol models and validation directly        | `aep`      |
 
 ## Install
@@ -79,6 +79,24 @@ if err != nil {
 Unknown additive fields and private Claim Names are accepted for forward compatibility. Registered
 Claim Values, closed Inspect objects, command relationships, and the supported AEP major version
 are validated natively.
+
+## Runnable examples
+
+| Example                                                       | Roles and behavior                                                                            |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| [Agent and Service lifecycle](./examples/agent-service/)       | Inspect, Claims, Enroll, API-key Grant, protected-resource authentication, and Revoke          |
+| [Hosted identity Platform](./examples/platform/)               | Platform discovery, identity provisioning, delegated signing, and identity listing            |
+
+Run either example directly, or build both from a clean checkout:
+
+```sh
+go run ./examples/agent-service
+go run ./examples/platform
+make examples
+```
+
+The examples use ephemeral in-memory stores and local key custody. The role guides identify the
+interfaces that production applications must replace.
 
 ## Development
 
