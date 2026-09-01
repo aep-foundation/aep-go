@@ -71,7 +71,8 @@ func MatchOpenAPIPath(templates []string, options OpenAPIPathMatchOptions) (Open
 
 func ResolveOpenAPIURL(finalInspectURL string, reference string, allowInsecureLoopback bool) (*url.URL, error) {
 	base, err := url.Parse(finalInspectURL)
-	if err != nil || base == nil || base.Scheme != "https" || base.Host == "" || base.User != nil {
+	if err != nil || base == nil || base.Host == "" || base.User != nil ||
+		base.Scheme != "https" && !(allowInsecureLoopback && base.Scheme == "http" && openAPILoopbackHost(base.Hostname())) {
 		return nil, errors.New("invalid final AEP Inspect URL")
 	}
 	referenceURL, err := url.Parse(reference)

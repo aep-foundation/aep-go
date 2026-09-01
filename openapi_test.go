@@ -26,6 +26,16 @@ func TestOpenAPIHelpersRejectUnsafeOrAmbiguousInputs(t *testing.T) {
 	}
 }
 
+func TestResolveOpenAPIURLAllowsConfiguredLoopback(t *testing.T) {
+	resolved, err := ResolveOpenAPIURL("http://127.0.0.1:4100/.well-known/aep", "/openapi.json", true)
+	if err != nil || resolved.String() != "http://127.0.0.1:4100/openapi.json" {
+		t.Fatalf("unexpected loopback OpenAPI URL: %v, %v", resolved, err)
+	}
+	if _, err := ResolveOpenAPIURL("http://127.0.0.1:4100/.well-known/aep", "/openapi.json", false); err == nil {
+		t.Fatal("insecure loopback OpenAPI URL was accepted without opt-in")
+	}
+}
+
 func TestOpenAPIPathLiteralPrecedenceResolvesEarlierAmbiguity(t *testing.T) {
 	match, err := MatchOpenAPIPath(
 		[]string{"/{kind}/item", "/{type}/item", "/orders/item"},
