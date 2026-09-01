@@ -90,8 +90,15 @@ func TestStoredBuiltInCredentialProfiles(t *testing.T) {
 		Headers: http.Header{"Service-Api-Key": []string{"api-secret"}}, Method: http.MethodGet,
 		URL: mustURL(t, "https://service.example/private"),
 	})
-	if err != nil || wrongHeader.Authenticated || wrongHeader.Response == nil || wrongHeader.Response.Body.Code != aep.ErrorNotRecognized {
-		t.Fatalf("API key under the wrong header was not rejected uniformly: %#v, %v", wrongHeader, err)
+	if err != nil || wrongHeader.Authenticated || wrongHeader.Response == nil || wrongHeader.Response.Body.Code != aep.ErrorAuthenticationRequired {
+		t.Fatalf("API key outside the issued header was treated as a credential presentation: %#v, %v", wrongHeader, err)
+	}
+	invalidAPIKey, err := service.AuthenticateProtectedResource(context.Background(), ProtectedResourceRequest{
+		Headers: http.Header{"X-Api-Key": []string{"invalid-secret"}}, Method: http.MethodGet,
+		URL: mustURL(t, "https://service.example/private"),
+	})
+	if err != nil || invalidAPIKey.Authenticated || invalidAPIKey.Response == nil || invalidAPIKey.Response.Body.Code != aep.ErrorNotRecognized {
+		t.Fatalf("invalid API key in the issued header was not recognized as a presentation: %#v, %v", invalidAPIKey, err)
 	}
 
 	revoked, err := service.Revoke(context.Background(), []byte(`{"credential_id":"oauth-1","grant_type":"oauth-bearer"}`), commandOptions(aep.AssertionRevoke, "revoke-oauth", "revoke-oauth"))

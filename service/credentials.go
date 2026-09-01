@@ -269,16 +269,6 @@ func (store *memoryServiceCredentialStore) HasCredentialPresentation(ctx context
 			return true, nil
 		}
 	}
-	for _, values := range input.Headers {
-		for _, value := range values {
-			candidate := sha256.Sum256([]byte(value))
-			for _, record := range store.records {
-				if record.grantType == grantType && subtle.ConstantTimeCompare(candidate[:], record.verifier[:]) == 1 {
-					return true, nil
-				}
-			}
-		}
-	}
 	return false, nil
 }
 

@@ -252,7 +252,11 @@ func evaluateServiceAPIKeyHeader(request adapterRequest) (bool, error) {
 	}
 	resource, _ := url.Parse("https://service.example/private")
 	result, err := instance.AuthenticateProtectedResource(context.Background(), service.ProtectedResourceRequest{Headers: http.Header{presentedHeader: []string{"opaque-api-key"}}, Method: http.MethodGet, URL: resource})
-	return err == nil && result.Response != nil && result.Response.Body.Code == aep.ErrorNotRecognized, err
+	expectedCode, expectedErr := requiredField[string](request.Case.Expected, "code")
+	if expectedErr != nil {
+		return false, expectedErr
+	}
+	return err == nil && result.Response != nil && string(result.Response.Body.Code) == expectedCode, err
 }
 
 func evaluateServicePaymentComposition() (bool, error) {
