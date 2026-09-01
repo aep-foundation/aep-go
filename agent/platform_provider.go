@@ -279,9 +279,7 @@ func (provider *PlatformIdentityProvider) sign(ctx context.Context, identity Ser
 		return platform.SignResponse{}, err
 	}
 	if response.Status == platform.SignCompleted {
-		issuedAt, issuedErr := time.Parse(time.RFC3339, response.IssuedAt)
-		expiresAt, expiresErr := time.Parse(time.RFC3339, response.ExpiresAt)
-		if status != http.StatusOK || response.ClientAssertion == "" || response.AgentDID != identity.AgentDID || response.ServiceDID != identity.ServiceDID || response.JWTID != claims.JWTID || issuedErr != nil || expiresErr != nil || issuedAt.Unix() != claims.IssuedAt || expiresAt.Unix() != claims.ExpiresAt {
+		if !validCompletedSignResponse(status, response, identity, claims) {
 			return platform.SignResponse{}, errors.New("AEP Platform returned an invalid completed Sign response")
 		}
 		return response, nil
@@ -290,6 +288,17 @@ func (provider *PlatformIdentityProvider) sign(ctx context.Context, identity Ser
 		return platform.SignResponse{}, errors.New("AEP Platform returned an invalid Sign status")
 	}
 	return response, nil
+}
+
+func validCompletedSignResponse(status int, response platform.SignResponse, identity ServiceIdentity, claims aep.ClientAssertionClaims) bool {
+	issuedAt, issuedErr := time.Parse(time.RFC3339, response.IssuedAt)
+	expiresAt, expiresErr := time.Parse(time.RFC3339, response.ExpiresAt)
+	if issuedErr != nil || expiresErr != nil {
+		return false
+	}
+	requestedLifetime := time.Duration(claims.ExpiresAt-claims.IssuedAt) * time.Second
+	return status == http.StatusOK && response.Status == platform.SignCompleted && response.ClientAssertion != "" && response.AgentDID == identity.AgentDID &&
+		response.ServiceDID == identity.ServiceDID && response.JWTID == claims.JWTID && expiresAt.Sub(issuedAt) == requestedLifetime
 }
 
 func (provider *PlatformIdentityProvider) newIdempotencyKey() (string, error) {

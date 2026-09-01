@@ -49,7 +49,7 @@ func TestPlatformIdentityProviderProvisionsAndSigns(t *testing.T) {
 			}
 			writePlatformJSON(t, response, platform.SignResponse{
 				AgentDID: "did:web:" + encodedTestHost(server.URL) + ":agents:one", ClientAssertion: "signed-assertion",
-				ExpiresAt: time.Unix(1300, 0).UTC().Format(time.RFC3339), IssuedAt: time.Unix(1000, 0).UTC().Format(time.RFC3339),
+				ExpiresAt: time.Unix(1301, 0).UTC().Format(time.RFC3339), IssuedAt: time.Unix(1001, 0).UTC().Format(time.RFC3339),
 				JWTID: body.JWTID, ServiceDID: body.ServiceDID, Status: platform.SignCompleted,
 			})
 		default:
@@ -85,6 +85,23 @@ func TestPlatformIdentityProviderProvisionsAndSigns(t *testing.T) {
 	}
 	if discoveryRequests.Load() != 1 || listRequests.Load() != 1 || provisionRequests.Load() != 1 || signRequests.Load() != 1 {
 		t.Fatalf("unexpected request counts: discovery=%d list=%d provision=%d sign=%d", discoveryRequests.Load(), listRequests.Load(), provisionRequests.Load(), signRequests.Load())
+	}
+}
+
+func TestCompletedPlatformSignResponseRequiresRequestedLifetime(t *testing.T) {
+	identity := ServiceIdentity{AgentDID: "did:web:agent.example", ServiceDID: "did:web:service.example"}
+	claims := assertionClaims(identity)
+	response := platform.SignResponse{
+		AgentDID: identity.AgentDID, ClientAssertion: "signed-assertion",
+		ExpiresAt: time.Unix(1301, 0).UTC().Format(time.RFC3339), IssuedAt: time.Unix(1001, 0).UTC().Format(time.RFC3339),
+		JWTID: claims.JWTID, ServiceDID: identity.ServiceDID, Status: platform.SignCompleted,
+	}
+	if !validCompletedSignResponse(http.StatusOK, response, identity, claims) {
+		t.Fatal("completed Platform Sign response with the requested lifetime was rejected")
+	}
+	response.ExpiresAt = time.Unix(1302, 0).UTC().Format(time.RFC3339)
+	if validCompletedSignResponse(http.StatusOK, response, identity, claims) {
+		t.Fatal("completed Platform Sign response with a different lifetime was accepted")
 	}
 }
 
