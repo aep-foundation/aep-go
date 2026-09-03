@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -139,7 +140,19 @@ func VerifyClientAssertion(ctx context.Context, assertion string, options Verify
 	}
 	nowSeconds := now.Unix()
 	toleranceSeconds := int64(options.ClockTolerance / time.Second)
-	if claims.IssuedAt > nowSeconds+toleranceSeconds || claims.ExpiresAt < nowSeconds-toleranceSeconds {
+	issuedDeadline := nowSeconds
+	if nowSeconds <= math.MaxInt64-toleranceSeconds {
+		issuedDeadline += toleranceSeconds
+	} else {
+		issuedDeadline = math.MaxInt64
+	}
+	expiryDeadline := nowSeconds
+	if nowSeconds >= math.MinInt64+toleranceSeconds {
+		expiryDeadline -= toleranceSeconds
+	} else {
+		expiryDeadline = math.MinInt64
+	}
+	if claims.IssuedAt > issuedDeadline || claims.ExpiresAt <= expiryDeadline {
 		return ClientAssertionClaims{}, errors.New("AEP client assertion is outside its validity window")
 	}
 	return claims, nil
