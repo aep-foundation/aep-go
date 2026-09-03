@@ -136,6 +136,34 @@ func TestServiceRejectsInvalidAssertionsBeforeRequestDetails(t *testing.T) {
 	}
 }
 
+func TestServiceRejectsExpirationBoundaryFromCustomVerifier(t *testing.T) {
+	boundary := testNow.Add(90 * time.Second)
+	clockSkew := 30 * time.Second
+	claims := aep.ClientAssertionClaims{
+		Audience: "did:web:service.example", ExpiresAt: boundary.Add(-30 * time.Second).Unix(),
+		IssuedAt: testNow.Unix(), Issuer: "did:web:agent.example", JWTID: "expiration-boundary",
+		Operation: aep.AssertionStatus, Subject: "did:web:agent.example",
+	}
+	service, err := New(Options{
+		ClientAssertion: ClientAssertionOptions{ClockSkew: &clockSkew},
+		Clock:           func() time.Time { return boundary },
+		IdentityMethods: []aep.IdentityMethod{aep.IdentityMethodDIDWeb},
+		ServiceDID:      claims.Audience,
+		Verifier: func(context.Context, string, AssertionVerificationContext) (aep.ClientAssertionClaims, error) {
+			return claims, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.Status(context.Background(), CommandOptions{
+		ClientAssertion: assertion(aep.AssertionStatus, claims.JWTID, ""),
+	})
+	if err != nil || result.Problem == nil || result.Problem.Code != aep.ErrorNotRecognized {
+		t.Fatalf("assertion was accepted at the expiration boundary: %#v, %v", result, err)
+	}
+}
+
 func TestServiceGrantAndRevokeFailures(t *testing.T) {
 	var revoked []aep.GrantType
 	first := &testGrantHandler{revoke: func(_ aep.RevokeRequest, context RevokeContext) error {

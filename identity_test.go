@@ -209,6 +209,68 @@ func TestInvalidIdentityInputs(t *testing.T) {
 	}
 }
 
+func TestVerifyClientAssertionRejectsExpirationBoundary(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_748_428_800, 0)
+	claims := ClientAssertionClaims{
+		Audience: "did:web:service.example", ExpiresAt: now.Unix(), IssuedAt: now.Add(-time.Minute).Unix(),
+		Issuer: "did:web:agent.example", JWTID: "expiration-boundary", Operation: AssertionStatus,
+		Subject: "did:web:agent.example",
+	}
+	assertion, err := SignClientAssertion(claims, SignClientAssertionOptions{
+		Algorithm: SigningAlgorithmEdDSA, Key: privateKey, KeyID: claims.Issuer + "#key-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = VerifyClientAssertion(context.Background(), assertion, VerifyClientAssertionOptions{
+		ClockTolerance: 30 * time.Second, CurrentTime: now.Add(30 * time.Second), Key: publicKey,
+	})
+	if err == nil {
+		t.Fatal("assertion was accepted at the expiration boundary")
+	}
+}
+
+func TestVerifyClientAssertionClockToleranceDoesNotOverflow(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name    string
+		now     int64
+		issued  int64
+		expires int64
+	}{
+		{name: "minimum", now: math.MinInt64 + 10, issued: math.MinInt64 + 1, expires: math.MinInt64 + 61},
+		{name: "maximum", now: math.MaxInt64 - 10, issued: math.MaxInt64 - 20, expires: math.MaxInt64},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			claims := ClientAssertionClaims{
+				Audience: "did:web:service.example", ExpiresAt: test.expires, IssuedAt: test.issued,
+				Issuer: "did:web:agent.example", JWTID: test.name, Operation: AssertionStatus,
+				Subject: "did:web:agent.example",
+			}
+			assertion, signErr := SignClientAssertion(claims, SignClientAssertionOptions{
+				Algorithm: SigningAlgorithmEdDSA, Key: privateKey, KeyID: claims.Issuer + "#key-1",
+			})
+			if signErr != nil {
+				t.Fatal(signErr)
+			}
+			_, verifyErr := VerifyClientAssertion(context.Background(), assertion, VerifyClientAssertionOptions{
+				ClockTolerance: 30 * time.Second, CurrentTime: time.Unix(test.now, 0), Key: publicKey,
+			})
+			if verifyErr != nil {
+				t.Fatalf("valid assertion was rejected near the timestamp boundary: %v", verifyErr)
+			}
+		})
+	}
+}
+
 func TestClientAssertionLoopbackResource(t *testing.T) {
 	claims := ClientAssertionClaims{
 		Audience: "did:web:127.0.0.1%3A4100", ExpiresAt: 61, IssuedAt: 1,

@@ -288,7 +288,7 @@ func (service *Service) validAssertion(assertion string, claims aep.ClientAssert
 	} else {
 		expiryDeadline = math.MinInt64
 	}
-	return claims.IssuedAt <= issuedDeadline && claims.ExpiresAt >= expiryDeadline
+	return claims.IssuedAt <= issuedDeadline && claims.ExpiresAt > expiryDeadline
 }
 
 func identityMethod(did string) aep.IdentityMethod {
