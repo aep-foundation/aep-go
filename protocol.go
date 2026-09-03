@@ -41,8 +41,10 @@ func ParseEnrollResponse(data []byte) (EnrollResponse, error) {
 
 func ValidateEnrollResponse(value EnrollResponse) error {
 	issues := make([]ValidationIssue, 0)
-	if value.Status != EnrollmentActive && value.Status != EnrollmentPending && value.Status != EnrollmentRejected {
-		issues = append(issues, ValidationIssue{Path: "$.status", Message: "Expected active, pending, or rejected."})
+	switch value.Status {
+	case AgentActive, AgentPending, AgentRejected, AgentSuspended, AgentTerminated, AgentUnavailable:
+	default:
+		issues = append(issues, ValidationIssue{Path: "$.status", Message: "Expected a registered Agent status."})
 	}
 	validateOwnerActionRequired(value.OwnerActionRequired, &issues)
 	validateNonEmptyStrings(value.VerificationPending, "$.verification_pending", &issues)

@@ -97,7 +97,7 @@ func runAgent(ctx context.Context, arguments []string) error {
 	if err != nil {
 		return err
 	}
-	if enrolled.Body.Status != aep.EnrollmentActive {
+	if enrolled.Body.Status != aep.AgentActive {
 		return fmt.Errorf("Node Service enrollment returned %q", enrolled.Body.Status)
 	}
 	granted, err := session.Grant(ctx, agent.GrantOptions{

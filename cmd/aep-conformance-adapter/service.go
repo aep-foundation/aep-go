@@ -45,10 +45,10 @@ func (conformanceGrantHandler) HasCredentialPresentation(context.Context, servic
 }
 
 func newConformanceService(policy service.EnrollmentPolicy) (*service.Service, error) {
-	return newConfiguredConformanceService(policy, nil, []service.GrantTypeDefinition{{GrantType: "custom-session", Handler: conformanceGrantHandler{}}}, nil)
+	return newConfiguredConformanceService(policy, nil, []service.GrantTypeDefinition{{GrantType: "custom-session", Handler: conformanceGrantHandler{}}}, nil, nil)
 }
 
-func newConfiguredConformanceService(policy service.EnrollmentPolicy, authenticationMethods []aep.AuthenticationMethod, grantTypes []service.GrantTypeDefinition, verifier service.AssertionVerifier) (*service.Service, error) {
+func newConfiguredConformanceService(policy service.EnrollmentPolicy, authenticationMethods []aep.AuthenticationMethod, grantTypes []service.GrantTypeDefinition, verifier service.AssertionVerifier, enrollmentStore service.EnrollmentStore) (*service.Service, error) {
 	if policy == nil {
 		policy = conformanceEnrollmentPolicy{}
 	}
@@ -65,6 +65,7 @@ func newConfiguredConformanceService(policy service.EnrollmentPolicy, authentica
 	return service.New(service.Options{
 		AuthenticationMethods: authenticationMethods,
 		Clock:                 func() time.Time { return serviceNow },
+		EnrollmentStore:       enrollmentStore,
 		EnrollmentPolicy:      policy,
 		GrantTypes:            grantTypes,
 		Identifier:            func() (string, error) { return "enrollment-1", nil },
@@ -75,7 +76,11 @@ func newConfiguredConformanceService(policy service.EnrollmentPolicy, authentica
 }
 
 func serviceCommandOptions(operation aep.AssertionOperation, key string) service.CommandOptions {
-	header, _ := json.Marshal(map[string]string{"alg": "EdDSA", "kid": "did:web:agent.example#key-1", "typ": "JWT"})
+	return serviceCommandOptionsForAgent(operation, key, "did:web:agent.example")
+}
+
+func serviceCommandOptionsForAgent(_ aep.AssertionOperation, key string, agentDID string) service.CommandOptions {
+	header, _ := json.Marshal(map[string]string{"alg": "EdDSA", "kid": agentDID + "#key-1", "typ": "JWT"})
 	payload := base64.RawURLEncoding.EncodeToString([]byte(`{}`))
 	assertion := base64.RawURLEncoding.EncodeToString(header) + "." + payload + ".signature"
 	return service.CommandOptions{ClientAssertion: assertion, IdempotencyKey: key}
@@ -89,7 +94,7 @@ func evaluateService(request adapterRequest) (bool, error) {
 	case "did-web-resolution":
 		return evaluateServiceDIDResolution(request)
 	case "repeated-existing":
-		return evaluateRepeatedEnrollment()
+		return evaluateRepeatedEnrollment(request)
 	case "grant-before-enroll-rejected":
 		return evaluateServiceGrantBeforeEnrollment(request)
 	case "command-header", "command-replay-conflict":
@@ -127,20 +132,92 @@ func evaluateServiceDIDResolution(request adapterRequest) (bool, error) {
 	return err == nil && resolved.String() == expected, err
 }
 
-func evaluateRepeatedEnrollment() (bool, error) {
+func evaluateRepeatedEnrollment(request adapterRequest) (bool, error) {
+	type existingEnrollment struct {
+		AgentDID string          `json:"agent_did"`
+		Since    string          `json:"since"`
+		Status   aep.AgentStatus `json:"status"`
+	}
+	type enrollmentRequest struct {
+		AgentDID       string `json:"agent_did"`
+		IdempotencyKey string `json:"idempotency_key"`
+	}
+	type expectedResponse struct {
+		Body        json.RawMessage `json:"body"`
+		ContentType string          `json:"content_type"`
+		Status      int             `json:"status"`
+	}
+
+	existing, err := requiredField[existingEnrollment](request.Case.Input, "existing")
+	if err != nil {
+		return false, err
+	}
+	enrollRequest, err := requiredField[enrollmentRequest](request.Case.Input, "request")
+	if err != nil {
+		return false, err
+	}
+	expected, err := requiredField[expectedResponse](request.Case.Expected, "response")
+	if err != nil {
+		return false, err
+	}
+	expectedPolicyEvaluated, err := requiredField[bool](request.Case.Expected, "policy_evaluated")
+	if err != nil {
+		return false, err
+	}
+	expectedRecordReplaced, err := requiredField[bool](request.Case.Expected, "record_replaced")
+	if err != nil {
+		return false, err
+	}
+	since, err := time.Parse(time.RFC3339, existing.Since)
+	if err != nil {
+		return false, err
+	}
+	expectedBody, err := aep.ParseEnrollResponse(expected.Body)
+	if err != nil {
+		return false, err
+	}
+
 	var calls atomic.Int32
-	instance, err := newConformanceService(conformanceEnrollmentPolicy{calls: &calls})
+	store := service.NewMemoryEnrollmentStore()
+	seeded := service.EnrollmentRecord{
+		AgentDID: existing.AgentDID, CreatedAt: since, EnrollmentID: "existing-enrollment", Since: since, Status: existing.Status, UpdatedAt: since,
+	}
+	if _, err := store.SaveEnrollment(context.Background(), seeded); err != nil {
+		return false, err
+	}
+	verifier := func(_ context.Context, _ string, verification service.AssertionVerificationContext) (aep.ClientAssertionClaims, error) {
+		return aep.ClientAssertionClaims{
+			Audience: verification.ServiceDID, ExpiresAt: verification.CurrentTime.Add(time.Minute).Unix(), IssuedAt: verification.CurrentTime.Unix(),
+			Issuer: enrollRequest.AgentDID, JWTID: "repeated-existing", Operation: verification.Operation, Resource: verification.Resource, Subject: enrollRequest.AgentDID,
+		}, nil
+	}
+	instance, err := newConfiguredConformanceService(
+		conformanceEnrollmentPolicy{calls: &calls}, nil,
+		[]service.GrantTypeDefinition{{GrantType: "custom-session", Handler: conformanceGrantHandler{}}}, verifier, store,
+	)
 	if err != nil {
 		return false, err
 	}
-	body := []byte(`{"agent_did":"did:web:agent.example"}`)
-	first, err := instance.Enroll(context.Background(), body, serviceCommandOptions(aep.AssertionEnroll, "first"))
+	body, err := json.Marshal(enrollRequest)
 	if err != nil {
 		return false, err
 	}
-	second, err := instance.Enroll(context.Background(), body, serviceCommandOptions(aep.AssertionEnroll, "second"))
-	if err != nil || first.Body.Status != aep.EnrollmentActive || second.Body.Status != aep.EnrollmentActive || calls.Load() != 1 {
-		return false, fmt.Errorf("repeated enrollment mismatch: first=%#v second=%#v policy_calls=%d error=%v", first, second, calls.Load(), err)
+	result, err := instance.Enroll(context.Background(), body, serviceCommandOptionsForAgent(aep.AssertionEnroll, enrollRequest.IdempotencyKey, enrollRequest.AgentDID))
+	if err != nil {
+		return false, err
+	}
+	after, err := store.FindEnrollment(context.Background(), enrollRequest.AgentDID)
+	if err != nil || after == nil {
+		return false, err
+	}
+	policyEvaluated := calls.Load() != 0
+	recordReplaced := !jsonEqual(seeded, *after)
+	if result.Status != expected.Status || result.ContentType != expected.ContentType || result.Problem != nil || !jsonEqual(result.Body, expectedBody) ||
+		policyEvaluated != expectedPolicyEvaluated || recordReplaced != expectedRecordReplaced {
+		return false, fmt.Errorf(
+			"repeated enrollment mismatch: result=%#v expected=%#v policy_evaluated=%t expected_policy_evaluated=%t record_replaced=%t expected_record_replaced=%t",
+			result, expected, policyEvaluated, expectedPolicyEvaluated, recordReplaced, expectedRecordReplaced,
+		)
 	}
 	return true, nil
 }
@@ -236,7 +313,7 @@ func evaluateServiceAPIKeyHeader(request adapterRequest) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	instance, err := newConfiguredConformanceService(nil, []aep.AuthenticationMethod{aep.AuthenticationMethod(aep.GrantTypeAPIKey)}, []service.GrantTypeDefinition{definition}, nil)
+	instance, err := newConfiguredConformanceService(nil, []aep.AuthenticationMethod{aep.AuthenticationMethod(aep.GrantTypeAPIKey)}, []service.GrantTypeDefinition{definition}, nil, nil)
 	if err != nil {
 		return false, err
 	}
@@ -260,7 +337,7 @@ func evaluateServiceAPIKeyHeader(request adapterRequest) (bool, error) {
 }
 
 func evaluateServicePaymentComposition() (bool, error) {
-	instance, err := newConfiguredConformanceService(nil, []aep.AuthenticationMethod{aep.AuthenticationMethodJWT}, nil, nil)
+	instance, err := newConfiguredConformanceService(nil, []aep.AuthenticationMethod{aep.AuthenticationMethodJWT}, nil, nil, nil)
 	if err != nil {
 		return false, err
 	}
@@ -281,7 +358,7 @@ func evaluateServiceOperationBinding() (bool, error) {
 			Issuer: "did:web:agent.example", JWTID: "substitution", Operation: aep.AssertionStatus, Subject: "did:web:agent.example",
 		}, nil
 	}
-	instance, err := newConfiguredConformanceService(nil, nil, nil, verifier)
+	instance, err := newConfiguredConformanceService(nil, nil, nil, verifier, nil)
 	if err != nil {
 		return false, err
 	}

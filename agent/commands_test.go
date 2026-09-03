@@ -49,7 +49,7 @@ func TestEnrollRejectsUnsatisfiedRequiredClaimsBeforeCommand(t *testing.T) {
 			return
 		}
 		commandCalls.Add(1)
-		_ = json.NewEncoder(response).Encode(aep.EnrollResponse{Status: aep.EnrollmentActive})
+		_ = json.NewEncoder(response).Encode(aep.EnrollResponse{Status: aep.AgentActive})
 	}))
 	defer server.Close()
 	serviceDID = didWebForServer(server.URL)
