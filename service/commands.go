@@ -46,7 +46,10 @@ func (service *Service) Enroll(ctx context.Context, body []byte, options Command
 			if decision.Status == "" {
 				decision.Status = aep.EnrollmentActive
 			}
-			candidate := enrollmentResponse(decision.Status, decision.OwnerActionRequired, decision.VerificationPending, decision.RequirementsPending)
+			if !validEnrollmentDecisionStatus(decision.Status) {
+				return EnrollmentRecord{}, errors.New("AEP enrollment policy returned an invalid initial status")
+			}
+			candidate := enrollmentResponse(aep.AgentStatus(decision.Status), decision.OwnerActionRequired, decision.VerificationPending, decision.RequirementsPending)
 			if err := aep.ValidateEnrollResponse(candidate); err != nil {
 				return EnrollmentRecord{}, err
 			}
@@ -375,7 +378,7 @@ func lifecycleProblem[Body any](code aep.ErrorCode, title string, status int, re
 	return result
 }
 
-func enrollmentResponse(status aep.EnrollmentStatus, ownerAction bool, verification []string, requirements []string) aep.EnrollResponse {
+func enrollmentResponse(status aep.AgentStatus, ownerAction bool, verification []string, requirements []string) aep.EnrollResponse {
 	response := aep.EnrollResponse{Status: status, VerificationPending: append([]string(nil), verification...), RequirementsPending: append([]string(nil), requirements...)}
 	if ownerAction {
 		value := "true"
@@ -386,21 +389,16 @@ func enrollmentResponse(status aep.EnrollmentStatus, ownerAction bool, verificat
 
 func enrollmentResult(record EnrollmentRecord) (aep.EnrollResponse, *Result[aep.EnrollResponse]) {
 	switch record.Status {
-	case aep.AgentActive, aep.AgentPending, aep.AgentRejected:
-		return enrollmentResponse(aep.EnrollmentStatus(record.Status), record.OwnerActionRequired, record.VerificationPending, record.RequirementsPending), nil
-	case aep.AgentSuspended:
-		result := lifecycleProblem[aep.EnrollResponse](aep.ErrorIdentitySuspended, "Identity suspended", http.StatusForbidden, record)
-		return aep.EnrollResponse{}, &result
-	case aep.AgentTerminated:
-		result := lifecycleProblem[aep.EnrollResponse](aep.ErrorIdentityTerminated, "Identity terminated", http.StatusForbidden, record)
-		return aep.EnrollResponse{}, &result
-	case aep.AgentUnavailable:
-		result := lifecycleProblem[aep.EnrollResponse](aep.ErrorIdentityUnavailable, "Identity unavailable", http.StatusForbidden, record)
-		return aep.EnrollResponse{}, &result
+	case aep.AgentActive, aep.AgentPending, aep.AgentRejected, aep.AgentSuspended, aep.AgentTerminated, aep.AgentUnavailable:
+		return enrollmentResponse(record.Status, record.OwnerActionRequired, record.VerificationPending, record.RequirementsPending), nil
 	default:
 		result := problemResult[aep.EnrollResponse](aep.ErrorEnrollmentFailed, "Enrollment failed", http.StatusBadRequest)
 		return aep.EnrollResponse{}, &result
 	}
+}
+
+func validEnrollmentDecisionStatus(status aep.EnrollmentStatus) bool {
+	return status == aep.EnrollmentActive || status == aep.EnrollmentPending || status == aep.EnrollmentRejected
 }
 
 func grantLifecycleProblem[Body any](record EnrollmentRecord) Result[Body] {

@@ -82,7 +82,7 @@ func TestHTTPHandlerExecutesCommandsAndPreservesFailures(t *testing.T) {
 		t.Fatalf("Enroll response was cacheable: %v", enrolled.Header())
 	}
 	response, err := aep.ParseEnrollResponse(enrolled.Body.Bytes())
-	if err != nil || response.Status != aep.EnrollmentActive {
+	if err != nil || response.Status != aep.AgentActive {
 		t.Fatalf("unexpected Enroll body: %#v, %v", response, err)
 	}
 

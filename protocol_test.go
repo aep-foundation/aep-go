@@ -45,8 +45,26 @@ func TestProtocolMessages(t *testing.T) {
 
 func TestEnrollAndStatusResponses(t *testing.T) {
 	enroll, err := ParseEnrollResponse([]byte(`{"status":"pending","owner_action_required":"false","verification_pending":["email"]}`))
-	if err != nil || enroll.Status != EnrollmentPending || enroll.OwnerActionRequired == nil {
+	if err != nil || enroll.Status != AgentPending || enroll.OwnerActionRequired == nil {
 		t.Fatalf("unexpected Enroll response: %#v, %v", enroll, err)
+	}
+	for _, lifecycle := range []AgentStatus{AgentActive, AgentPending, AgentRejected, AgentSuspended, AgentTerminated, AgentUnavailable} {
+		response, parseErr := ParseEnrollResponse([]byte(`{"status":"` + string(lifecycle) + `"}`))
+		if parseErr != nil || response.Status != lifecycle {
+			t.Fatalf("Enroll did not accept %s: %#v, %v", lifecycle, response, parseErr)
+		}
+	}
+	for name, body := range map[string]string{
+		"empty":        `{}`,
+		"empty-status": `{"status":""}`,
+		"unknown":      `{"status":"unknown"}`,
+		"wrong-type":   `{"status":1}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := ParseEnrollResponse([]byte(body)); err == nil {
+				t.Fatal("Enroll accepted an invalid Agent status")
+			}
+		})
 	}
 	status, err := ParseStatusResponse([]byte(`{"status":"active","since":"2026-08-29T12:00:00Z"}`))
 	if err != nil || status.Status != AgentActive {
@@ -74,7 +92,7 @@ func TestCoreMetadataModels(t *testing.T) {
 
 func TestCanonicalOwnerActionSerialization(t *testing.T) {
 	falseValue := "false"
-	data, err := json.Marshal(EnrollResponse{Status: EnrollmentPending, OwnerActionRequired: &falseValue})
+	data, err := json.Marshal(EnrollResponse{Status: AgentPending, OwnerActionRequired: &falseValue})
 	if err != nil {
 		t.Fatal(err)
 	}

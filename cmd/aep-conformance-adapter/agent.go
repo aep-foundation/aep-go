@@ -153,7 +153,7 @@ func evaluateAgentEnrollRequest(request adapterRequest) (bool, error) {
 		captured = incoming.Clone(incoming.Context())
 		capturedBody, _ = io.ReadAll(incoming.Body)
 		response.Header().Set("Content-Type", aep.MediaType)
-		_ = json.NewEncoder(response).Encode(aep.EnrollResponse{Status: aep.EnrollmentActive})
+		_ = json.NewEncoder(response).Encode(aep.EnrollResponse{Status: aep.AgentActive})
 	}))
 	defer server.Close()
 	parsed, err := url.Parse(server.URL)

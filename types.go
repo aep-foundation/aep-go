@@ -137,7 +137,7 @@ type EnrollRequest struct {
 }
 
 type EnrollResponse struct {
-	Status              EnrollmentStatus  `json:"status"`
+	Status              AgentStatus       `json:"status"`
 	OwnerActionRequired *string           `json:"owner_action_required,omitempty"`
 	VerificationPending []string          `json:"verification_pending,omitempty"`
 	RequirementsPending []string          `json:"requirements_pending,omitempty"`

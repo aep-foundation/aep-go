@@ -45,11 +45,11 @@ func TestServiceCommandsAndIdempotency(t *testing.T) {
 
 	enrollBody := []byte(`{"agent_did":"did:web:agent.example","claims":{"contact.email":"agent@example.com"}}`)
 	enrolled, err := service.Enroll(context.Background(), enrollBody, commandOptions(aep.AssertionEnroll, "enroll-1", "enroll-key"))
-	if err != nil || enrolled.Problem != nil || enrolled.Body.Status != aep.EnrollmentActive || policyCalls.Load() != 1 {
+	if err != nil || enrolled.Problem != nil || enrolled.Body.Status != aep.AgentActive || policyCalls.Load() != 1 {
 		t.Fatalf("unexpected enrollment result: %#v, %v", enrolled, err)
 	}
 	repeated, err := service.Enroll(context.Background(), enrollBody, commandOptions(aep.AssertionEnroll, "enroll-2", "another-key"))
-	if err != nil || repeated.Body.Status != aep.EnrollmentActive || policyCalls.Load() != 1 {
+	if err != nil || repeated.Body.Status != aep.AgentActive || policyCalls.Load() != 1 {
 		t.Fatalf("existing enrollment was not stable: %#v, %v", repeated, err)
 	}
 
@@ -71,6 +71,36 @@ func TestServiceCommandsAndIdempotency(t *testing.T) {
 	conflict, err := service.Revoke(context.Background(), []byte(`{"grant_type":"custom-session"}`), commandOptions(aep.AssertionRevoke, "revoke-1", "grant-key"))
 	if err != nil || conflict.Problem == nil || conflict.Problem.Code != aep.ErrorIdempotencyConflict {
 		t.Fatalf("cross-command idempotency conflict was not rejected: %#v, %v", conflict, err)
+	}
+}
+
+func TestServiceRestrictsInitialEnrollmentStatus(t *testing.T) {
+	for _, test := range []struct {
+		status aep.EnrollmentStatus
+		valid  bool
+	}{
+		{status: aep.EnrollmentActive, valid: true},
+		{status: aep.EnrollmentPending, valid: true},
+		{status: aep.EnrollmentRejected, valid: true},
+		{status: aep.EnrollmentStatus(aep.AgentSuspended)},
+		{status: aep.EnrollmentStatus(aep.AgentTerminated)},
+		{status: aep.EnrollmentStatus(aep.AgentUnavailable)},
+		{status: "unknown"},
+	} {
+		t.Run(string(test.status), func(t *testing.T) {
+			instance := newTestService(t, Options{
+				EnrollmentPolicy: testEnrollmentPolicy(func(aep.EnrollRequest, EnrollmentPolicyContext) (EnrollmentDecision, error) {
+					return EnrollmentDecision{Status: test.status}, nil
+				}),
+			})
+			result, err := instance.Enroll(context.Background(), []byte(`{"agent_did":"did:web:agent.example"}`), commandOptions(aep.AssertionEnroll, "initial-status", "initial-status"))
+			if test.valid && (err != nil || result.Body.Status != aep.AgentStatus(test.status)) {
+				t.Fatalf("valid initial enrollment status was rejected: %#v, %v", result, err)
+			}
+			if !test.valid && (err == nil || !strings.Contains(err.Error(), "invalid initial status")) {
+				t.Fatalf("invalid initial enrollment status was accepted: %#v, %v", result, err)
+			}
+		})
 	}
 }
 
@@ -217,15 +247,14 @@ func TestServiceRepresentsExtendedLifecycleStates(t *testing.T) {
 
 func TestServiceMapsEveryNonActiveLifecycleState(t *testing.T) {
 	tests := []struct {
-		status     aep.AgentStatus
-		enrollCode aep.ErrorCode
-		grantCode  aep.ErrorCode
+		status    aep.AgentStatus
+		grantCode aep.ErrorCode
 	}{
 		{status: aep.AgentPending, grantCode: aep.ErrorVerificationPending},
 		{status: aep.AgentRejected, grantCode: aep.ErrorEnrollmentFailed},
-		{status: aep.AgentSuspended, enrollCode: aep.ErrorIdentitySuspended, grantCode: aep.ErrorIdentitySuspended},
-		{status: aep.AgentTerminated, enrollCode: aep.ErrorIdentityTerminated, grantCode: aep.ErrorIdentityTerminated},
-		{status: aep.AgentUnavailable, enrollCode: aep.ErrorIdentityUnavailable, grantCode: aep.ErrorIdentityUnavailable},
+		{status: aep.AgentSuspended, grantCode: aep.ErrorIdentitySuspended},
+		{status: aep.AgentTerminated, grantCode: aep.ErrorIdentityTerminated},
+		{status: aep.AgentUnavailable, grantCode: aep.ErrorIdentityUnavailable},
 	}
 	for index, test := range tests {
 		store := NewMemoryEnrollmentStore()
@@ -243,12 +272,8 @@ func TestServiceMapsEveryNonActiveLifecycleState(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if test.enrollCode == "" {
-			if enrolled.Problem != nil || enrolled.Body.Status != aep.EnrollmentStatus(test.status) {
-				t.Fatalf("unexpected %s Enroll result: %#v", test.status, enrolled)
-			}
-		} else if enrolled.Problem == nil || enrolled.Problem.Code != test.enrollCode {
-			t.Fatalf("unexpected %s Enroll problem: %#v", test.status, enrolled)
+		if enrolled.Status != http.StatusOK || enrolled.Problem != nil || enrolled.Body.Status != test.status {
+			t.Fatalf("unexpected %s Enroll result: %#v", test.status, enrolled)
 		}
 		granted, err := service.Grant(context.Background(), []byte(`{"grant_type":"custom-session"}`), commandOptions(aep.AssertionGrant, "grant-lifecycle-"+suffix, "grant-lifecycle-"+suffix))
 		if err != nil || granted.Problem == nil || granted.Problem.Code != test.grantCode {
