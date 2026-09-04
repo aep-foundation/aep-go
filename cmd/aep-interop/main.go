@@ -162,7 +162,11 @@ func runServer(ctx context.Context, arguments []string) error {
 	baseURL := "http://" + *listen
 	encodedHost := strings.ReplaceAll(*listen, ":", "%3A")
 	serviceDID := "did:web:" + encodedHost + ":services:store"
-	hosted, err := newPlatform(*listen, serviceDID)
+	platformServiceDID := os.Getenv("AEP_INTEROP_SERVICE_DID")
+	if platformServiceDID == "" {
+		platformServiceDID = serviceDID
+	}
+	hosted, err := newPlatform(*listen, platformServiceDID)
 	if err != nil {
 		return err
 	}
