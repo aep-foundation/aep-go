@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -303,7 +304,18 @@ func identityMethod(did string) aep.IdentityMethod {
 }
 
 func executeIdempotent[Body any](service *Service, ctx context.Context, agentDID string, command IdempotentCommand, key string, request any, parse func([]byte) (Body, error), execute func() (Result[Body], error)) (Result[Body], error) {
-	canonical, err := json.Marshal(request)
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		return Result[Body]{}, err
+	}
+	// Decode RawMessage members so nested object ordering does not change the hash.
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return Result[Body]{}, err
+	}
+	canonical, err := json.Marshal(value)
 	if err != nil {
 		return Result[Body]{}, err
 	}

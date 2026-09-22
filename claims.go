@@ -12,6 +12,7 @@ var (
 	countryPattern     = regexp.MustCompile(`^[A-Z]{2}$`)
 	atomPattern        = regexp.MustCompile(`^[A-Za-z0-9!#$%&'*+\-/=?^_` + "`" + `{|}~]+$`)
 	domainLabelPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$`)
+	addressTagPattern  = regexp.MustCompile(`^[A-Za-z0-9-]*[A-Za-z0-9]$`)
 )
 
 func ParseClaimValues(data []byte) (ClaimValues, error) {
@@ -236,7 +237,7 @@ func isAddressLiteral(value string) bool {
 		return false
 	}
 	tag, literal := content[:separator], content[separator+1:]
-	if !regexp.MustCompile(`^[A-Za-z0-9-]*[A-Za-z0-9]$`).MatchString(tag) {
+	if !addressTagPattern.MatchString(tag) {
 		return false
 	}
 	for _, character := range []byte(literal) {

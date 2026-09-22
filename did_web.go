@@ -67,6 +67,9 @@ func didWebDocumentURL(did string, allowInsecureLoopback bool) (*url.URL, error)
 			if decodeErr != nil {
 				return nil, fmt.Errorf("decode did:web path: %w", decodeErr)
 			}
+			if !isDIDWebPathSegment(component) {
+				return nil, fmt.Errorf("invalid did:web path component: %s", part)
+			}
 			decoded = append(decoded, component)
 		}
 		path = "/" + strings.Join(decoded, "/") + "/did.json"
@@ -114,6 +117,7 @@ func ResolveDIDWebPublicKey(ctx context.Context, options ResolveDIDWebPublicKeyO
 		return jose.JSONWebKey{}, fmt.Errorf("fetch did:web document: HTTP %d", response.StatusCode)
 	}
 	var document struct {
+		ID                  string `json:"id"`
 		VerificationMethods []struct {
 			ID           string          `json:"id"`
 			PublicKeyJWK json.RawMessage `json:"publicKeyJwk"`
@@ -129,8 +133,20 @@ func ResolveDIDWebPublicKey(ctx context.Context, options ResolveDIDWebPublicKeyO
 	if err := decodeOne(data, &document); err != nil {
 		return jose.JSONWebKey{}, fmt.Errorf("decode did:web document: %w", err)
 	}
+	// The document has to claim the DID it was fetched for. Without this a host that can publish
+	// any document under the resolved path could answer for another Agent's DID.
+	if document.ID != options.DID {
+		return jose.JSONWebKey{}, fmt.Errorf("did:web document does not identify %s", options.DID)
+	}
+	// DWB-ID-002 allows kid to carry a fragment, and a DID document may publish that verification
+	// method under either its absolute id or the relative fragment alone.
+	_, fragment, hasFragment := strings.Cut(options.KeyID, "#")
+	relativeKeyID := ""
+	if hasFragment {
+		relativeKeyID = "#" + fragment
+	}
 	for _, method := range document.VerificationMethods {
-		if method.ID != options.KeyID {
+		if method.ID != options.KeyID && (relativeKeyID == "" || method.ID != relativeKeyID) {
 			continue
 		}
 		if len(method.PublicKeyJWK) == 0 {
@@ -146,6 +162,24 @@ func ResolveDIDWebPublicKey(ctx context.Context, options ResolveDIDWebPublicKeyO
 		return key, nil
 	}
 	return jose.JSONWebKey{}, fmt.Errorf("no public JWK found for %s", options.KeyID)
+}
+
+// isDIDWebPathSegment reports whether a decoded did:web component is a single path segment.
+//
+// DWB-RES-001 maps each colon-separated component onto one path segment. A component that decodes
+// to a separator or a dot segment would instead re-point the document URL: "..%2F..%2Fetc" walks
+// out of the Agent's namespace, and "a%2Fb" silently expands one component into two segments.
+func isDIDWebPathSegment(component string) bool {
+	if component == "" || component == "." || component == ".." {
+		return false
+	}
+	for index := 0; index < len(component); index++ {
+		character := component[index]
+		if character == '/' || character == '\\' || character == '?' || character == '#' || character < 0x21 || character == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 func isLoopbackHost(hostname string) bool {

@@ -303,7 +303,7 @@ func validCompletedSignResponse(status int, response platform.SignResponse, iden
 
 func (provider *PlatformIdentityProvider) newIdempotencyKey() (string, error) {
 	key, err := provider.idempotencyKey()
-	if err != nil || strings.TrimSpace(key) == "" {
+	if err != nil || !validIdempotencyKey(key) {
 		return "", errors.New("AEP Platform idempotency key generation failed")
 	}
 	return key, nil

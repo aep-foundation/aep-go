@@ -44,7 +44,7 @@ func (client *Client) inspect(ctx context.Context, serviceURL *url.URL) (Inspect
 		}
 	}
 	if cached != nil && inspectCacheFresh(*cached, client.clock()) {
-		inspection, buildErr := inspectionFromCache(serviceURL, inspectURL, *cached)
+		inspection, buildErr := inspectionFromCache(serviceURL, inspectURL, *cached, client.allowInsecureLoopback)
 		if buildErr == nil {
 			return inspection, nil
 		}
@@ -145,7 +145,7 @@ func (client *Client) inspectResponse(response *http.Response, serviceURL *url.U
 		entry.CachedAt = client.clock()
 		entry.FinalURL = finalURL.String()
 		mergeCacheHeaders(&entry, response.Header)
-		return inspectionFromCache(serviceURL, inspectURL, entry)
+		return inspectionFromCache(serviceURL, inspectURL, entry, client.allowInsecureLoopback)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return Inspection{}, &InspectError{Code: InspectHTTPError, Status: response.StatusCode, Text: fmt.Sprintf("AEP Inspect failed with HTTP %d", response.StatusCode)}
@@ -190,10 +190,13 @@ func doWithoutRedirects(client *http.Client, request *http.Request) (*http.Respo
 	return copy.Do(request)
 }
 
-func inspectionFromCache(serviceURL *url.URL, inspectURL *url.URL, entry InspectCacheEntry) (Inspection, error) {
+func inspectionFromCache(serviceURL *url.URL, inspectURL *url.URL, entry InspectCacheEntry, allowInsecureLoopback bool) (Inspection, error) {
 	finalURL, err := url.Parse(entry.FinalURL)
 	if err != nil {
 		return Inspection{}, err
+	}
+	if !validInspectTarget(finalURL) || finalURL.Scheme != inspectURL.Scheme || !sameOrigin(finalURL, inspectURL) {
+		return Inspection{}, &InspectError{Code: InspectInvalidRedirect, Text: "AEP cached Inspect URL changed origin or scheme"}
 	}
 	document, err := cloneInspectDocument(entry.Document)
 	if err != nil {
@@ -208,7 +211,7 @@ func inspectionFromCache(serviceURL *url.URL, inspectURL *url.URL, entry Inspect
 		LastModified: entry.LastModified,
 		ServiceURL:   cloneURL(serviceURL),
 	}
-	return inspection, validateServiceIdentity(inspection, serviceURL.Scheme == "http")
+	return inspection, validateServiceIdentity(inspection, allowInsecureLoopback)
 }
 
 func validateServiceIdentity(inspection Inspection, allowInsecureLoopback bool) error {
@@ -216,11 +219,37 @@ func validateServiceIdentity(inspection Inspection, allowInsecureLoopback bool) 
 	if !strings.HasPrefix(serviceDID, "did:web:") {
 		return &InspectError{Code: InspectServiceIdentityMismatch, Text: "AEP Inspect Service DID has no supported origin binding"}
 	}
-	documentURL, err := aep.DIDWebDocumentURLWithOptions(serviceDID, aep.DIDWebDocumentURLOptions{AllowInsecureLoopback: allowInsecureLoopback})
-	if err != nil || documentURL.Scheme != inspection.FinalURL.Scheme || !sameOrigin(documentURL, inspection.FinalURL) {
+	// A did:web identifier carries a host and an optional port but no scheme, so the binding is
+	// about authority. Comparing against a loopback-downgraded URL instead made an HTTPS Service
+	// on a loopback host unbindable whenever plaintext loopback was permitted.
+	documentURL, err := aep.DIDWebDocumentURL(serviceDID)
+	if err != nil || !sameAuthority(documentURL, inspection.FinalURL) {
+		return &InspectError{Code: InspectServiceIdentityMismatch, Text: "AEP Inspect Service DID does not match the Inspect origin"}
+	}
+	if !acceptableInspectScheme(inspection.FinalURL, allowInsecureLoopback) {
 		return &InspectError{Code: InspectServiceIdentityMismatch, Text: "AEP Inspect Service DID does not match the Inspect origin"}
 	}
 	return nil
+}
+
+// sameAuthority compares the host and port a did:web identifier names against the URL the Inspect
+// document was actually served from. A did:web identifier spells a non-default port explicitly, so
+// an absent port on either side means the other must be on its scheme's default.
+func sameAuthority(first *url.URL, second *url.URL) bool {
+	if !strings.EqualFold(first.Hostname(), second.Hostname()) {
+		return false
+	}
+	if first.Port() == "" {
+		return second.Port() == "" || second.Port() == effectivePort(&url.URL{Scheme: second.Scheme})
+	}
+	return first.Port() == effectivePort(second)
+}
+
+func acceptableInspectScheme(target *url.URL, allowInsecureLoopback bool) bool {
+	if strings.EqualFold(target.Scheme, "https") {
+		return true
+	}
+	return allowInsecureLoopback && strings.EqualFold(target.Scheme, "http") && isLoopback(target.Hostname())
 }
 
 func inspectCacheFresh(entry InspectCacheEntry, now time.Time) bool {

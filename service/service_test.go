@@ -104,6 +104,115 @@ func TestServiceRestrictsInitialEnrollmentStatus(t *testing.T) {
 	}
 }
 
+func TestGrantIdempotencyIgnoresNestedObjectOrder(t *testing.T) {
+	var calls atomic.Int32
+	instance := newTestService(t, Options{GrantTypes: []GrantTypeDefinition{{GrantType: "custom-session", Handler: &testGrantHandler{
+		grant: func(aep.GrantRequest, GrantContext) (json.RawMessage, error) {
+			calls.Add(1)
+			return json.RawMessage(`{"credential_id":"one"}`), nil
+		},
+	}}}})
+	seedEnrollment(t, instance.enrollmentStore)
+	for _, test := range []struct {
+		jti, body string
+		status    int
+	}{
+		{"first", `{"grant_type":"custom-session","preferences":{"b":[{"y":2,"x":1}],"a":9007199254740993}}`, 200},
+		{"reordered", `{"preferences":{"a":9007199254740993,"b":[{"x":1,"y":2}]},"grant_type":"custom-session"}`, 200},
+		{"changed integer", `{"grant_type":"custom-session","preferences":{"a":9007199254740992,"b":[{"x":1,"y":2}]}}`, 409},
+		{"changed array", `{"grant_type":"custom-session","preferences":{"a":9007199254740993,"b":[{"x":1,"y":2},{}]}}`, 409},
+	} {
+		t.Run(test.jti, func(t *testing.T) {
+			result, err := instance.Grant(context.Background(), []byte(test.body), commandOptions(aep.AssertionGrant, test.jti, "same-request"))
+			if err != nil || result.Status != test.status {
+				t.Fatalf("status=%d problem=%v error=%v", result.Status, result.Problem, err)
+			}
+			if calls.Load() != 1 {
+				t.Fatalf("issuer called %d times", calls.Load())
+			}
+		})
+	}
+}
+
+func TestCachedGrantStillRequiresVerifiedFreshAssertion(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, wrongKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var grants atomic.Int32
+	instance, err := New(Options{
+		ServiceDID: "did:web:service.example", IdentityMethods: []aep.IdentityMethod{aep.IdentityMethodDIDWeb},
+		Clock: func() time.Time { return testNow },
+		Verifier: func(ctx context.Context, token string, verification AssertionVerificationContext) (aep.ClientAssertionClaims, error) {
+			return aep.VerifyClientAssertion(ctx, token, aep.VerifyClientAssertionOptions{
+				Key: publicKey, Algorithms: verification.SigningAlgorithms, Audience: verification.ServiceDID,
+				Operation: verification.Operation, Resource: verification.Resource,
+				CurrentTime: verification.CurrentTime, ClockTolerance: verification.ClockTolerance,
+			})
+		},
+		GrantTypes: []GrantTypeDefinition{{GrantType: "custom-session", Handler: &testGrantHandler{
+			grant: func(aep.GrantRequest, GrantContext) (json.RawMessage, error) {
+				grants.Add(1)
+				return json.RawMessage(`{"credential_id":"one","secret":"cached-secret"}`), nil
+			},
+		}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedEnrollment(t, instance.enrollmentStore)
+	handler, err := NewHTTPHandler(instance, HTTPHandlerOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var firstBody string
+	for _, test := range []struct {
+		name, jti string
+		op        aep.AssertionOperation
+		key       ed25519.PrivateKey
+		status    int
+	}{
+		{"initial", "first", aep.AssertionGrant, privateKey, 200},
+		{"fresh retry", "second", aep.AssertionGrant, privateKey, 200},
+		{"replayed assertion", "first", aep.AssertionGrant, privateKey, 401},
+		{"wrong operation", "third", aep.AssertionEnroll, privateKey, 401},
+		{"wrong key", "fourth", aep.AssertionGrant, wrongKey, 401},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			token, err := aep.SignClientAssertion(aep.ClientAssertionClaims{
+				Audience: "did:web:service.example", Issuer: "did:web:agent.example", Subject: "did:web:agent.example",
+				IssuedAt: testNow.Unix(), ExpiresAt: testNow.Add(time.Minute).Unix(), JWTID: test.jti, Operation: test.op,
+			}, aep.SignClientAssertionOptions{Algorithm: aep.SigningAlgorithmEdDSA, Key: test.key, KeyID: "did:web:agent.example#key-1"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			response := serveRequest(handler, http.MethodPost, "/aep/grant", `{"grant_type":"custom-session"}`, commandHeaders(token, "same-key"))
+			if response.Code != test.status {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			if test.status == 200 {
+				if firstBody == "" {
+					firstBody = response.Body.String()
+				} else if response.Body.String() != firstBody {
+					t.Fatal("retry changed cached credential")
+				}
+			} else {
+				assertAEPProblem(t, response, 401, aep.ErrorNotRecognized)
+				if strings.Contains(response.Body.String(), "cached-secret") {
+					t.Fatal("unauthenticated retry disclosed credential")
+				}
+			}
+			if grants.Load() != 1 {
+				t.Fatalf("issuer calls=%d", grants.Load())
+			}
+		})
+	}
+}
+
 func TestMemoryEnrollmentStoreFindOrCreateIsAtomic(t *testing.T) {
 	store := NewMemoryEnrollmentStore()
 	start := make(chan struct{})

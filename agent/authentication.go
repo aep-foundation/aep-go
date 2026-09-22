@@ -11,6 +11,8 @@ import (
 	aep "github.com/aep-foundation/aep-go"
 )
 
+var errCredentialNotFound = errors.New("requested AEP credential was not found")
+
 func (session *Session) AuthenticationHeaders(ctx context.Context, options AuthenticationOptions) (http.Header, error) {
 	if options.ClientAssertionOnly && (options.CredentialID != "" || options.GrantType != "") {
 		return nil, errors.New("AEP credential selection cannot be combined with client-assertion-only authentication")
@@ -29,6 +31,15 @@ func (session *Session) AuthenticationHeaders(ctx context.Context, options Authe
 		return nil, err
 	}
 	methods := authenticationMethods(inspection.Document)
+	if options.AllowedMethods != nil {
+		filtered := make([]aep.AuthenticationMethod, 0, len(methods))
+		for _, method := range methods {
+			if containsAuthenticationMethod(options.AllowedMethods, method) {
+				filtered = append(filtered, method)
+			}
+		}
+		methods = filtered
+	}
 	if options.GrantType != "" && !containsAuthenticationMethod(methods, aep.AuthenticationMethod(options.GrantType)) {
 		return nil, ErrNoAuthenticationMethod
 	}
@@ -48,7 +59,7 @@ func (session *Session) AuthenticationHeaders(ctx context.Context, options Authe
 				return credentialHeaders(*record, options.Carrier)
 			}
 			if options.CredentialID != "" || options.GrantType != "" {
-				return nil, errors.New("requested AEP credential was not found")
+				return nil, errCredentialNotFound
 			}
 		}
 	}

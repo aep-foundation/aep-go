@@ -187,6 +187,88 @@ func TestPlatformIdentityProviderReusesActiveIdentity(t *testing.T) {
 	}
 }
 
+type failingIdentitySave struct{ IdentityStore }
+
+func (failingIdentitySave) SaveIdentity(context.Context, ServiceIdentity) error {
+	return errors.New("identity persistence failed")
+}
+
+func TestGrantRecoversHostedIdentityWithoutProvisioning(t *testing.T) {
+	for _, scenario := range []string{"active", "missing", "lookup-error", "store-error", "unadvertised-identity-method", "suspended", "terminated", "different-service"} {
+		t.Run(scenario, func(t *testing.T) {
+			stub := newServiceStub(t, nil)
+			var provisions, lists, signs atomic.Int32
+			var hosted *httptest.Server
+			hosted = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.URL.Path == platform.WellKnownPath:
+					writePlatformJSON(t, w, platformDiscovery(hosted.URL))
+				case r.URL.Path == "/v1/aep/agent-identities" && r.Method == http.MethodGet:
+					lists.Add(1)
+					if scenario == "lookup-error" {
+						http.Error(w, "unavailable", http.StatusServiceUnavailable)
+						return
+					}
+					if scenario == "missing" {
+						writePlatformJSON(t, w, platform.AgentIdentityListResponse{Count: "0", Total: "0", Data: []platform.AgentIdentity{}})
+						return
+					}
+					identity := platformIdentity(hosted.URL)
+					identity.ServiceDID = stub.serviceDID
+					switch scenario {
+					case "suspended":
+						identity.Status = platform.ManagedAgentSuspended
+					case "terminated":
+						identity.Status = platform.ManagedAgentTerminated
+					case "different-service":
+						identity.ServiceDID = "did:web:other.example"
+					}
+					writePlatformJSON(t, w, platform.AgentIdentityListResponse{Count: "1", Total: "1", Data: []platform.AgentIdentity{identity}})
+				case r.URL.Path == "/v1/aep/agent-identities" && r.Method == http.MethodPost:
+					provisions.Add(1)
+					http.Error(w, "unexpected provisioning", http.StatusInternalServerError)
+				case strings.HasSuffix(r.URL.Path, "/sign"):
+					signs.Add(1)
+					var request platform.SignRequest
+					if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+						t.Error(err)
+						return
+					}
+					now := time.Now().UTC().Truncate(time.Second)
+					writePlatformJSON(t, w, platform.SignResponse{AgentDID: platformIdentity(hosted.URL).AgentDID, ServiceDID: stub.serviceDID, Status: platform.SignCompleted, ClientAssertion: "platform-assertion", JWTID: request.JWTID, IssuedAt: now.Format(time.RFC3339), ExpiresAt: now.Add(5 * time.Minute).Format(time.RFC3339)})
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			t.Cleanup(hosted.Close)
+			stub.client.identityProvider = newTestPlatformProvider(t, hosted, nil)
+			if scenario == "store-error" {
+				stub.client.identityStore = failingIdentitySave{NewMemoryIdentityStore()}
+			}
+			if scenario == "unadvertised-identity-method" {
+				stub.document.Identity.Methods = []aep.IdentityMethod{"custom-method"}
+			}
+			result, err := stub.session.Grant(context.Background(), GrantOptions{GrantType: aep.GrantTypeOAuthBearer})
+			if provisions.Load() != 0 || lists.Load() != 1 {
+				t.Fatalf("provisions=%d lists=%d", provisions.Load(), lists.Load())
+			}
+			if scenario != "active" {
+				if err == nil || signs.Load() != 0 || len(stub.requests) != 0 {
+					t.Fatalf("failed recovery performed work: signs=%d requests=%d result=%#v err=%v", signs.Load(), len(stub.requests), result, err)
+				}
+				return
+			}
+			if err != nil || result.Body.Credential == nil || signs.Load() != 2 {
+				t.Fatalf("recovered Grant: %#v, %v; signs=%d", result, err, signs.Load())
+			}
+			stored, err := stub.client.identityStore.FindIdentity(context.Background(), stub.serviceDID)
+			if err != nil || stored == nil || stored.Metadata["agent_identity_id"] != "identity-1" {
+				t.Fatalf("recovered identity not persisted: %#v %v", stored, err)
+			}
+		})
+	}
+}
+
 func TestPlatformIdentityProviderEncodesOpaqueIdentityID(t *testing.T) {
 	provider, err := NewPlatformIdentityProvider(PlatformIdentityProviderOptions{PlatformURL: "https://platform.example"})
 	if err != nil {

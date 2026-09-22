@@ -56,7 +56,9 @@ func (service *Service) AuthenticateProtectedResource(ctx context.Context, reque
 	}
 
 	now := service.clock()
-	presented := authorization != ""
+	method := authorizationMethod(authorization)
+	presented := method != ""
+	advertisedPresentation := false
 	credentialInput := func() CredentialAuthenticationInput {
 		resourceURL := *request.URL
 		return CredentialAuthenticationInput{Headers: headers.Clone(), Method: request.Method, Now: now, URL: &resourceURL}
@@ -72,6 +74,7 @@ func (service *Service) AuthenticateProtectedResource(ctx context.Context, reque
 				return ProtectedResourceResult{}, detectErr
 			}
 			presented = presented || detected
+			advertisedPresentation = advertisedPresentation || detected
 		}
 		principal, authenticateErr := handler.(CredentialAuthenticator).AuthenticateCredential(ctx, credentialInput())
 		if authenticateErr != nil {
@@ -92,6 +95,11 @@ func (service *Service) AuthenticateProtectedResource(ctx context.Context, reque
 		}
 		principal.Scopes = append([]string(nil), principal.Scopes...)
 		return ProtectedResourceResult{Authenticated: true, Principal: principal}, nil
+	}
+	if method != "" && !advertisedPresentation && !slices.Contains(service.authenticationMethods, method) {
+		if _, err := aep.ParseProtectedResourceAuthorization(authorization, aep.ProtectedResourceStandard); err == nil {
+			return service.protectedResourceProblem(aep.ErrorUnsupportedAuthenticationMethod, resource), nil
+		}
 	}
 	if presented {
 		return service.protectedResourceProblem(aep.ErrorNotRecognized, resource), nil
@@ -173,6 +181,21 @@ func headerValues(header http.Header, name string) []string {
 		}
 	}
 	return values
+}
+
+// Unrelated schemes such as Payment are not AEP credential presentations.
+func authorizationMethod(fieldValue string) aep.AuthenticationMethod {
+	scheme, _, _ := strings.Cut(strings.ReplaceAll(fieldValue, "\t", " "), " ")
+	switch {
+	case strings.EqualFold(scheme, string(aep.CredentialSchemeAEP)):
+		return aep.AuthenticationMethodJWT
+	case strings.EqualFold(scheme, string(aep.CredentialSchemeBearer)):
+		return aep.AuthenticationMethod(aep.GrantTypeOAuthBearer)
+	case strings.EqualFold(scheme, string(aep.CredentialSchemeBasic)):
+		return aep.AuthenticationMethod(aep.GrantTypeBasic)
+	default:
+		return ""
+	}
 }
 
 func isLoopbackHostname(hostname string) bool {

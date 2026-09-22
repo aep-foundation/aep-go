@@ -115,20 +115,13 @@ func runAgent(ctx context.Context, arguments []string) error {
 	if err != nil {
 		return err
 	}
-	headers, err := session.AuthenticationHeaders(ctx, agent.AuthenticationOptions{
-		CredentialID: credential.CredentialID,
-		GrantType:    aep.GrantTypeAPIKey,
-		Resource:     resource,
-	})
-	if err != nil {
-		return err
-	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, resource.String(), nil)
 	if err != nil {
 		return err
 	}
-	request.Header = headers
-	response, err := http.DefaultClient.Do(request)
+	response, err := client.FetchProtectedResource(ctx, request, agent.ProtectedResourceOptions{
+		Authentication: agent.AuthenticationOptions{CredentialID: credential.CredentialID, GrantType: aep.GrantTypeAPIKey},
+	})
 	if err != nil {
 		return err
 	}

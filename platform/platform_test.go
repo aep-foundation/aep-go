@@ -28,16 +28,17 @@ const (
 var testClock = time.Now().UTC().Truncate(time.Second)
 
 type testAuthorizer struct {
-	allowed    bool
-	mu         sync.Mutex
-	operations []AuthorizationOperation
+	allowed         bool
+	verifyPrincipal string
+	mu              sync.Mutex
+	operations      []AuthorizationOperation
 }
 
-func (authorizer *testAuthorizer) Authorize(_ context.Context, request AuthorizationRequest, _ RequestContext) (bool, error) {
+func (authorizer *testAuthorizer) Authorize(_ context.Context, request AuthorizationRequest, requestContext RequestContext) (bool, error) {
 	authorizer.mu.Lock()
 	authorizer.operations = append(authorizer.operations, request.Operation)
 	authorizer.mu.Unlock()
-	return authorizer.allowed, nil
+	return authorizer.allowed && (request.Operation != AuthorizeVerify || authorizer.verifyPrincipal == "" || requestContext.Principal == authorizer.verifyPrincipal), nil
 }
 
 func (authorizer *testAuthorizer) recordedOperations() []AuthorizationOperation {
@@ -194,11 +195,11 @@ func TestPlatformLifecycle(t *testing.T) {
 	if err != nil || deniedVerification.Body.Verified || deniedVerification.Body.Reason != "not_recognized" {
 		t.Fatalf("denied verification leaked identity state: %#v, %v", deniedVerification, err)
 	}
-	authorizer.allowed = true
 	wrongPrincipalVerification, err := platform.Verify(ctx, verificationRequest, RequestContext{IdempotencyKey: "verify-wrong-principal", Now: testClock, Principal: "owner-2"})
 	if err != nil || wrongPrincipalVerification.Body.Verified {
-		t.Fatalf("cross-principal verification succeeded: %#v, %v", wrongPrincipalVerification, err)
+		t.Fatalf("unauthorized verification succeeded: %#v, %v", wrongPrincipalVerification, err)
 	}
+	authorizer.allowed = true
 	wrongOperation := verificationRequest
 	wrongOperation.Operation = aep.AssertionStatus
 	wrongOperationVerification, err := platform.Verify(ctx, wrongOperation, RequestContext{IdempotencyKey: "verify-wrong-operation", Now: testClock, Principal: testPrincipal})
@@ -487,6 +488,40 @@ func TestPlatformSigningRequestSemanticsAndPendingResponses(t *testing.T) {
 	pending, err := pendingPlatform.Sign(ctx, testAgentIdentityID, SignRequest{JWTID: "pending", Operation: aep.AssertionEnroll, ServiceDID: testServiceDID}, RequestContext{IdempotencyKey: "pending", Principal: testPrincipal})
 	if err != nil || pending.Status != 202 || pending.Body.Status != "pending" || pending.Body.RetryAfterSeconds != "5" || pending.Headers.Get("Retry-After") != "" {
 		t.Fatalf("unexpected pending response: %#v, %v", pending, err)
+	}
+}
+
+func TestSignIdempotencyIgnoresNestedObjectOrder(t *testing.T) {
+	calls := 0
+	platform, _, _ := newTestPlatformWithHandler(t, func(_ context.Context, input SignHandlerInput, _ RequestContext) (*Result[SignResponse], error) {
+		calls++
+		return &Result[SignResponse]{Body: SignResponse{PlatformContext: cloneRawMap(input.Request.PlatformContext), RetryAfterSeconds: "5", Status: SignPending}, ContentType: aep.MediaType, Status: 202}, nil
+	})
+	ctx := context.Background()
+	provisioned, err := platform.Provision(ctx, ProvisionRequest{ServiceDID: testServiceDID}, RequestContext{IdempotencyKey: "provision", Principal: testPrincipal})
+	if err != nil || provisioned.Status != 200 {
+		t.Fatalf("provision: %#v, %v", provisioned, err)
+	}
+	cases := []struct {
+		name    string
+		context string
+		status  int
+	}{
+		{"initial", `{"b":[{"y":2,"x":1}],"a":9007199254740993}`, 202},
+		{"reordered", `{"a":9007199254740993,"b":[{"x":1,"y":2}]}`, 202},
+		{"changed integer", `{"a":9007199254740992,"b":[{"x":1,"y":2}]}`, 409},
+		{"changed array", `{"a":9007199254740993,"b":[{"x":1,"y":2},{}]}`, 409},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := platform.Sign(ctx, testAgentIdentityID, SignRequest{JWTID: "sign", Operation: aep.AssertionEnroll, ServiceDID: testServiceDID, PlatformContext: map[string]json.RawMessage{"selection": json.RawMessage(test.context)}}, RequestContext{IdempotencyKey: "sign", Principal: testPrincipal})
+			if err != nil || result.Status != test.status {
+				t.Fatalf("sign: %#v, %v; want status %d", result, err, test.status)
+			}
+		})
+	}
+	if calls != 1 {
+		t.Fatalf("sign handler called %d times; want 1", calls)
 	}
 }
 

@@ -38,6 +38,10 @@ func MatchOpenAPIPath(templates []string, options OpenAPIPathMatchOptions) (Open
 		matched := true
 		for index, segment := range templateSegments {
 			if strings.HasPrefix(segment, "{") && strings.HasSuffix(segment, "}") && len(segment) > 2 {
+				if requestSegments[index] == "" {
+					matched = false
+					break
+				}
 				specificity[index] = '0'
 				continue
 			}

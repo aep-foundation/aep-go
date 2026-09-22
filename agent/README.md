@@ -111,6 +111,73 @@ if err != nil {
 
 `AuthenticationHeaders` follows the Service's advertised preference order. A specific `CredentialID` or `GrantType` can be requested. Set `ClientAssertionOnly` only when the protected resource advertises `aep-jwt`.
 
+## Send an authenticated resource request
+
+`FetchProtectedResource` uses the advertised OpenAPI policy when it identifies a required
+authentication method. Otherwise it sends an anonymous request and authenticates only
+after a valid AEP `401` challenge. An unrelated `401`, a `403`, or another application
+response is returned without an authentication retry.
+
+```go
+request, err := http.NewRequest(http.MethodPost,
+	"https://service.example/catalog/search", strings.NewReader(`{"query":"flowers"}`))
+if err != nil {
+	return err
+}
+request.Header.Set("Content-Type", "application/json")
+response, err := client.FetchProtectedResource(ctx, request, agent.ProtectedResourceOptions{})
+if err != nil {
+	return err
+}
+defer response.Body.Close()
+```
+
+The request is not modified or consumed. Nonempty bodies need `GetBody`; `http.NewRequest`
+sets it for `strings.Reader`, `bytes.Reader`, and `bytes.Buffer`. Streams without `GetBody`
+and request trailers are rejected before discovery. Each retry preserves the method and body.
+
+If no compatible stored credential exists, the workflow can request an advertised Grant
+using an existing identity and active enrollment. It never calls Enroll. An explicitly
+selected missing credential, a store failure, or a signing failure is returned to the caller.
+
+Same-origin redirects produce fresh resource-bound JWTs. Cross-origin redirects discard
+all caller headers and generated credentials, restart anonymously, and require a new AEP
+challenge before authenticating. `MaximumRedirects` defaults to five. `RequestTimeout`
+bounds the whole operation, including reading the returned response body; close that body
+when finished.
+
+For payment composition, set `Authentication.Carrier` to `aep.ProtectedResourceDedicated`
+and put payment headers in `AdditionalAuthenticationHeaders`. Those headers are sent only
+on authenticated requests to the original origin. Put application headers such as
+`Content-Type` on the request; do not put custom authentication secrets there, since
+ordinary headers can accompany the initial anonymous request. Custom HTTP transports
+must not inject credentials into anonymous requests.
+
+## Read a resource's OpenAPI authentication policy
+
+`OpenAPIPolicy` reads the OpenAPI document advertised by Inspect and selects the operation
+using the request method and path. Query parameters do not select an operation.
+
+```go
+policy, err := session.OpenAPIPolicy(ctx, http.MethodGet, resource)
+if err != nil {
+	return err
+}
+```
+
+The policy's `State` is `public`, `required`, or `fallback`. `required` includes the AEP
+methods from complete alternatives; a compound requirement is not reduced to a single
+method. `fallback` means the application must use an anonymous request and the Service's
+live AEP challenge rather than assume authentication is required or unnecessary.
+OpenAPI describes authentication; it does not authorize access.
+
+Retrieval sends no authentication headers or cookies, follows at most five redirects,
+and rejects transport downgrades. The Client's `RequestTimeout` and
+`MaximumResponseBytes` bound retrieval (30 seconds and 1 MiB by default). Documents are
+cached in memory using HTTP cache metadata, including conditional revalidation and
+`no-store`. `AuthenticationOptions.AllowedMethods` can restrict header generation to
+the methods allowed by an operation, intersected with those advertised by the Service.
+
 ## Revoke
 
 ```go

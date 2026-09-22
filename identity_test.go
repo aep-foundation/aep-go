@@ -49,6 +49,7 @@ func TestResolveDIDWebPublicKey(t *testing.T) {
 		}
 		response.Header().Set("Content-Type", "application/did+json")
 		_ = json.NewEncoder(response).Encode(map[string]any{
+			"id": did,
 			"verificationMethod": []any{map[string]any{
 				"id": did + "#key-1", "publicKeyJwk": jwk,
 			}},
