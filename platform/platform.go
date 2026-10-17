@@ -511,11 +511,13 @@ func executeIdempotent[Body any](ctx context.Context, operation IdempotentOperat
 		return Result[Body]{}, err
 	}
 	hash := sha256.Sum256(canonical)
+	legacyHash := sha256.Sum256(encoded)
 	result, err := store.ExecuteIdempotent(ctx, IdempotencyInput{
-		IdempotencyKey: requestContext.IdempotencyKey,
-		Operation:      operation,
-		Principal:      requestContext.Principal,
-		RequestHash:    hex.EncodeToString(hash[:]),
+		IdempotencyKey:       requestContext.IdempotencyKey,
+		Operation:            operation,
+		Principal:            requestContext.Principal,
+		RequestHash:          hex.EncodeToString(legacyHash[:]),
+		CanonicalRequestHash: hex.EncodeToString(hash[:]),
 	}, func() (StoredResponse, error) {
 		response, err := execute()
 		if err != nil {

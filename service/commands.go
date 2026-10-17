@@ -320,8 +320,10 @@ func executeIdempotent[Body any](service *Service, ctx context.Context, agentDID
 		return Result[Body]{}, err
 	}
 	digest := sha256.Sum256(canonical)
+	legacyDigest := sha256.Sum256(encoded)
 	result, err := service.idempotencyStore.ExecuteIdempotent(ctx, IdempotencyInput{
-		AgentDID: agentDID, Command: command, IdempotencyKey: key, RequestHash: "sha256:" + hex.EncodeToString(digest[:]),
+		AgentDID: agentDID, Command: command, IdempotencyKey: key, RequestHash: "sha256:" + hex.EncodeToString(legacyDigest[:]),
+		CanonicalRequestHash: "sha256:" + hex.EncodeToString(digest[:]),
 	}, func() (StoredResponse, error) {
 		created, executeErr := execute()
 		if executeErr != nil {

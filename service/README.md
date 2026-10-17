@@ -13,6 +13,24 @@ A Service must provide:
 
 The SDK supplies in-memory enrollment, replay, idempotency, and credential stores for examples and tests. Production Services should replace them with atomic, durable implementations shared by every application instance.
 
+### Upgrading persisted state from v0.1.1
+
+Keep enrollment, credential, and completed idempotency records. Service credential
+storage does not require a hash conversion. Do not clear idempotency records to resolve
+an upgrade: doing so can execute a completed Enroll, Grant, or Revoke request again.
+
+`IdempotencyInput.RequestHash` retains the v0.1.1 calculation. Persist the optional
+`CanonicalRequestHash` as well, and use `savedInput.Matches(requestInput)` inside your
+store's atomic operation. It checks the Agent, command, and key, then compares canonical
+hashes when both inputs contain them; otherwise it compares `RequestHash`. Records
+without the new field need no backfill. For a database column, an empty string represents
+an absent canonical hash.
+
+Existing adapters that compare only `RequestHash` still recognize exact retries, but
+retain v0.1.1's sensitivity to member ordering in nested request JSON. Workers on v0.1.1
+can compare `RequestHash` from records written by upgraded workers. Keep that field and
+the complete response until normal expiry; do not replace it with the canonical hash.
+
 ```go
 serviceCore, err := service.New(service.Options{
 	EndpointBase:    "/aep/",
