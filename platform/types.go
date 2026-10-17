@@ -263,10 +263,23 @@ type StoredResponse struct {
 }
 
 type IdempotencyInput struct {
-	IdempotencyKey string
-	Operation      IdempotentOperation
-	Principal      string
-	RequestHash    string
+	CanonicalRequestHash string
+	IdempotencyKey       string
+	Operation            IdempotentOperation
+	Principal            string
+	RequestHash          string
+}
+
+// Matches compares canonical hashes when both records have them, otherwise the
+// published request hash. Persist both hashes to support mixed-version workers.
+func (input IdempotencyInput) Matches(other IdempotencyInput) bool {
+	if input.Principal != other.Principal || input.Operation != other.Operation || input.IdempotencyKey != other.IdempotencyKey {
+		return false
+	}
+	if input.CanonicalRequestHash != "" && other.CanonicalRequestHash != "" {
+		return input.CanonicalRequestHash == other.CanonicalRequestHash
+	}
+	return input.RequestHash == other.RequestHash
 }
 
 type IdempotencyState string

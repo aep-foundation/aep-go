@@ -191,7 +191,7 @@ func (store *memoryIdempotencyStore) ExecuteIdempotent(ctx context.Context, inpu
 		store.expire(store.clock())
 		if existing, found := store.records[key]; found {
 			store.mu.Unlock()
-			if existing.input.Command != input.Command || existing.input.RequestHash != input.RequestHash {
+			if !existing.input.Matches(input) {
 				return IdempotencyResult{State: IdempotencyConflict}, nil
 			}
 			return IdempotencyResult{Response: cloneStoredResponse(existing.response), State: IdempotencyReplayed}, nil

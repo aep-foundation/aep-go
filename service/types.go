@@ -104,10 +104,24 @@ type StoredResponse struct {
 }
 
 type IdempotencyInput struct {
-	AgentDID       string
-	Command        IdempotentCommand
-	IdempotencyKey string
-	RequestHash    string
+	CanonicalRequestHash string
+	AgentDID             string
+	Command              IdempotentCommand
+	IdempotencyKey       string
+	RequestHash          string
+}
+
+// Matches compares canonical hashes when both records have them, otherwise the
+// published request hash. Keep RequestHash when persisting canonical metadata so
+// workers using either store contract can replay the same completed operation.
+func (input IdempotencyInput) Matches(other IdempotencyInput) bool {
+	if input.AgentDID != other.AgentDID || input.Command != other.Command || input.IdempotencyKey != other.IdempotencyKey {
+		return false
+	}
+	if input.CanonicalRequestHash != "" && other.CanonicalRequestHash != "" {
+		return input.CanonicalRequestHash == other.CanonicalRequestHash
+	}
+	return input.RequestHash == other.RequestHash
 }
 
 type IdempotencyState string

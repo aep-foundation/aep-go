@@ -13,6 +13,23 @@ The `platform` package implements the hosted-identity role for Agent runtimes th
 
 The default identity and idempotency stores are in-memory. Production Platforms should provide durable, tenant-scoped stores and production key custody.
 
+### Upgrading persisted state from v0.1.1
+
+Keep existing identities and completed idempotency responses until their normal expiry.
+Deleting those responses can repeat provisioning or signing. No identity or credential
+hash migration is required.
+
+Persist both `IdempotencyInput.RequestHash` and the optional `CanonicalRequestHash`.
+Use `savedInput.Matches(requestInput)` within your store's atomic operation: it compares
+the principal, operation, and key, then canonical hashes if both are present, otherwise
+`RequestHash`. Existing records can leave `CanonicalRequestHash` empty; no backfill is
+needed. Keep `RequestHash` unchanged because it uses the v0.1.1 calculation and remains
+readable by v0.1.1 workers.
+
+An adapter that compares only `RequestHash` remains usable for exact retries, but does
+not gain canonical comparison of differently ordered nested JSON. All workers must
+continue using shared atomic coordination; the extra hash does not replace it.
+
 ```go
 hosted, err := platform.New(platform.Options{
 	Authorizer:     authorizer,
