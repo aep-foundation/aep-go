@@ -57,4 +57,6 @@ Use `Sign` for operation-bound client assertions, `GetIdentity` and `List` for m
 
 Hosted verification is opt-in. Enabling it requires a replay store so that accepted assertions are consumed atomically.
 
+For `Verify`, the `Authorizer` must decide whether the authenticated caller may verify assertions for the requested Service and learn the Agent identity in the result. That caller can be a trusted Service rather than the Agent identity's owner. Authorization is checked on every request, including retries; cached results are scoped to the calling principal. Permission to verify does not grant permission to sign or manage the identity.
+
 The [Platform example](../examples/platform/) demonstrates discovery, provisioning, signing, and listing.

@@ -265,6 +265,37 @@ func TestInspectRejectsUnsafeCachedFinalURL(t *testing.T) {
 	}
 }
 
+func TestInspectRejectsFreshCacheFromAnotherOrigin(t *testing.T) {
+	var requests atomic.Int32
+	var serviceDID string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", aep.MediaType)
+		_ = json.NewEncoder(w).Encode(testInspectDocument(serviceDID))
+	}))
+	defer server.Close()
+	serviceDID = didWebForServer(server.URL)
+	cache := NewMemoryInspectCache()
+	if err := cache.SaveInspect(context.Background(), server.URL+aep.WellKnownPath, InspectCacheEntry{
+		CacheControl: "max-age=300", CachedAt: time.Now(),
+		Document: testInspectDocument("did:web:other.example"), FinalURL: "https://other.example" + aep.WellKnownPath,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	client, err := New(Options{HTTPClient: server.Client(), IdentityProvider: newTestIdentityProvider(t), InspectCache: cache})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := client.Service(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspection, err := session.Inspect(context.Background())
+	if err != nil || inspection.Document.Service.DID != serviceDID || requests.Load() != 1 {
+		t.Fatalf("cached foreign Service accepted: DID=%q requests=%d error=%v", inspection.Document.Service.DID, requests.Load(), err)
+	}
+}
+
 func TestIdentityChangesWithServiceDID(t *testing.T) {
 	var serviceDID atomic.Value
 	server := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
@@ -486,7 +517,7 @@ func TestLifecycleAndCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	grant, err := session.Grant(context.Background(), GrantOptions{GrantType: aep.GrantTypeOAuthBearer, RequestedScopes: []string{"read"}})
-	if err != nil || grant.Body.Credential == nil || statusCalls.Load() != 1 {
+	if err != nil || grant.Body.Credential == nil || statusCalls.Load() != 0 {
 		t.Fatalf("unexpected Grant: %#v, status=%d, error=%v", grant, statusCalls.Load(), err)
 	}
 	headers, err := session.AuthenticationHeaders(context.Background(), AuthenticationOptions{Resource: mustURL(t, server.URL+"/private")})

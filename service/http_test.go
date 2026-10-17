@@ -34,7 +34,7 @@ func TestHTTPHandlerServesInspectAndAdvertisedRoutes(t *testing.T) {
 	}
 
 	wrongMethod := serveRequest(handler, http.MethodPost, aep.WellKnownPath, "", nil)
-	if wrongMethod.Code != http.StatusMethodNotAllowed || wrongMethod.Header().Get("Allow") != http.MethodGet || wrongMethod.Header().Get("Content-Type") != aep.ProblemMediaType {
+	if wrongMethod.Code != http.StatusMethodNotAllowed || wrongMethod.Header().Get("Allow") != "GET, HEAD" || wrongMethod.Header().Get("Content-Type") != aep.ProblemMediaType {
 		t.Fatalf("unexpected Inspect method response: %d %v", wrongMethod.Code, wrongMethod.Header())
 	}
 

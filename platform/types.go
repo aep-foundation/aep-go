@@ -335,6 +335,8 @@ type Platform struct {
 	didPathPrefix       string
 	didURLTemplate      string
 	discovery           DiscoveryDocument
+	discoveryETag       string
+	discoveryModified   string
 	hostedVerification  bool
 	identifier          func() (string, error)
 	idempotencyStore    IdempotencyStore

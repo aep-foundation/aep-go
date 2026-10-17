@@ -112,6 +112,8 @@ type Client struct {
 	idempotencyKeys       IdempotencyKeyProvider
 	inspectCache          InspectCache
 	inspectHTTPClient     *http.Client
+	openAPIMu             sync.Mutex
+	openAPICache          map[string]openAPIEntry
 	jti                   func() (string, error)
 	maximumResponseBytes  int64
 	requestTimeout        time.Duration
@@ -172,6 +174,7 @@ type WaitOptions struct {
 }
 
 type AuthenticationOptions struct {
+	AllowedMethods      []aep.AuthenticationMethod
 	Carrier             aep.ProtectedResourceCarrier
 	ClientAssertionOnly bool
 	CredentialID        string
@@ -180,11 +183,13 @@ type AuthenticationOptions struct {
 }
 
 type Session struct {
-	client       *Client
-	identity     *ServiceIdentity
-	identityMu   sync.Mutex
-	inspectionMu sync.Mutex
-	serviceURL   *url.URL
+	activeEnrollment string
+	enrollmentMu     sync.Mutex
+	client           *Client
+	identity         *ServiceIdentity
+	identityMu       sync.Mutex
+	inspectionMu     sync.Mutex
+	serviceURL       *url.URL
 }
 
 type CommandError struct {

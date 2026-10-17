@@ -36,7 +36,11 @@ func (session *Session) Enroll(ctx context.Context, options EnrollOptions) (Comm
 	if err := aep.ValidateEnrollRequest(requestBody); err != nil {
 		return CommandResult[aep.EnrollResponse]{}, err
 	}
-	return executeCommand(session, ctx, inspection, identity, signer, aep.CommandEnroll, http.MethodPost, requestBody, key, aep.ParseEnrollResponse)
+	result, err := executeCommand(session, ctx, inspection, identity, signer, aep.CommandEnroll, http.MethodPost, requestBody, key, aep.ParseEnrollResponse)
+	if err == nil {
+		session.recordEnrollment(identity, result.Body.Status)
+	}
+	return result, err
 }
 
 func (session *Session) Status(ctx context.Context) (CommandResult[aep.StatusResponse], error) {
@@ -44,7 +48,26 @@ func (session *Session) Status(ctx context.Context) (CommandResult[aep.StatusRes
 	if err != nil {
 		return CommandResult[aep.StatusResponse]{}, err
 	}
-	return executeCommand(session, ctx, inspection, identity, signer, aep.CommandStatus, http.MethodGet, nil, "", aep.ParseStatusResponse)
+	result, err := executeCommand(session, ctx, inspection, identity, signer, aep.CommandStatus, http.MethodGet, nil, "", aep.ParseStatusResponse)
+	if err == nil {
+		session.recordEnrollment(identity, result.Body.Status)
+	}
+	return result, err
+}
+
+func (session *Session) recordEnrollment(identity ServiceIdentity, status aep.AgentStatus) {
+	session.enrollmentMu.Lock()
+	defer session.enrollmentMu.Unlock()
+	session.activeEnrollment = ""
+	if status == aep.AgentActive {
+		session.activeEnrollment = identity.ServiceDID + "\x00" + identity.AgentDID
+	}
+}
+
+func (session *Session) hasActiveEnrollment(identity ServiceIdentity) bool {
+	session.enrollmentMu.Lock()
+	defer session.enrollmentMu.Unlock()
+	return session.activeEnrollment == identity.ServiceDID+"\x00"+identity.AgentDID
 }
 
 func (session *Session) WaitForActive(ctx context.Context, options WaitOptions) (CommandResult[aep.StatusResponse], error) {
@@ -99,15 +122,18 @@ func (session *Session) Grant(ctx context.Context, options GrantOptions) (Comman
 	if err != nil {
 		return CommandResult[GrantResult]{}, err
 	}
-	if !containsCommand(inspection.Document.Commands.Supported, aep.CommandStatus) {
-		return CommandResult[GrantResult]{}, errors.New("AEP Grant requires the Service to advertise Status")
-	}
-	status, err := executeCommand(session, ctx, inspection, identity, signer, aep.CommandStatus, http.MethodGet, nil, "", aep.ParseStatusResponse)
-	if err != nil {
-		return CommandResult[GrantResult]{}, err
-	}
-	if status.Body.Status != aep.AgentActive {
-		return CommandResult[GrantResult]{}, &CommandError{Status: http.StatusUnauthorized, Text: "AEP Grant requires active enrollment"}
+	if !session.hasActiveEnrollment(identity) {
+		if !containsCommand(inspection.Document.Commands.Supported, aep.CommandStatus) {
+			return CommandResult[GrantResult]{}, errors.New("AEP Grant requires active enrollment; call Enroll or use a Service advertising Status")
+		}
+		status, err := executeCommand(session, ctx, inspection, identity, signer, aep.CommandStatus, http.MethodGet, nil, "", aep.ParseStatusResponse)
+		if err != nil {
+			return CommandResult[GrantResult]{}, err
+		}
+		session.recordEnrollment(identity, status.Body.Status)
+		if status.Body.Status != aep.AgentActive {
+			return CommandResult[GrantResult]{}, &CommandError{Status: http.StatusUnauthorized, Text: "AEP Grant requires active enrollment"}
+		}
 	}
 	key, err := session.idempotencyKey(ctx, inspection, OperationKey{Command: aep.CommandGrant, GrantType: grantType}, options.IdempotencyKey)
 	if err != nil {
@@ -164,6 +190,11 @@ func (session *Session) Revoke(ctx context.Context, options RevokeOptions) (Comm
 	}
 	if err := aep.ValidateRevokeRequest(requestBody); err != nil {
 		return CommandResult[aep.RevokeResponse]{}, err
+	}
+	// An Agent selects a grant type from what the Service advertises, the same rule Grant applies.
+	// Naming an unadvertised one spends a signature on a request the Service will refuse.
+	if requestBody.GrantType != "" && !containsGrantType(inspection.Document.Commands.GrantTypes, requestBody.GrantType) {
+		return CommandResult[aep.RevokeResponse]{}, ErrNoCompatibleGrantType
 	}
 	if requestBody.CredentialID != "" {
 		config, found := inspection.Document.Commands.GrantTypesConfig[string(requestBody.GrantType)]
@@ -264,6 +295,22 @@ func (session *Session) existingCommandContext(ctx context.Context, command aep.
 	identity, err := session.client.identityStore.FindIdentity(ctx, inspection.Document.Service.DID)
 	if err != nil {
 		return Inspection{}, ServiceIdentity{}, nil, err
+	}
+	if identity == nil {
+		if provider, ok := session.client.identityProvider.(*PlatformIdentityProvider); ok {
+			identity, err = provider.FindIdentityByServiceDID(ctx, inspection.Document.Service.DID)
+			if err != nil {
+				return Inspection{}, ServiceIdentity{}, nil, err
+			}
+			if identity != nil {
+				if err := validateIdentityForInspection(*identity, inspection); err != nil {
+					return Inspection{}, ServiceIdentity{}, nil, err
+				}
+				if err := session.client.identityStore.SaveIdentity(ctx, cloneIdentity(*identity)); err != nil {
+					return Inspection{}, ServiceIdentity{}, nil, err
+				}
+			}
+		}
 	}
 	if identity == nil {
 		return Inspection{}, ServiceIdentity{}, nil, &CommandError{Status: http.StatusUnauthorized, Text: "AEP Grant requires an existing enrolled identity"}
@@ -406,6 +453,9 @@ func validateIdentityForInspection(identity ServiceIdentity, inspection Inspecti
 
 func (session *Session) idempotencyKey(ctx context.Context, inspection Inspection, operation OperationKey, provided string) (string, error) {
 	if provided != "" {
+		if !validIdempotencyKey(provided) {
+			return "", errors.New("AEP idempotency key must be a non-empty header value without surrounding or control characters")
+		}
 		return provided, nil
 	}
 	operation.ServiceDID = inspection.Document.Service.DID
@@ -414,10 +464,27 @@ func (session *Session) idempotencyKey(ctx context.Context, inspection Inspectio
 	if err != nil {
 		return "", err
 	}
-	if key == "" {
-		return "", errors.New("AEP idempotency key provider returned an empty key")
+	if !validIdempotencyKey(key) {
+		return "", errors.New("AEP idempotency key provider returned an unusable key")
 	}
 	return key, nil
+}
+
+// validIdempotencyKey reports whether a key survives being written as an HTTP field value.
+//
+// CORE-IDP-001 requires a non-empty Idempotency-Key, and net/http trims a field value before
+// sending it. A key of only whitespace therefore reached the Service as an empty header, and a key
+// with surrounding whitespace reached it as a different key than the Agent recorded.
+func validIdempotencyKey(value string) bool {
+	if value == "" || value != strings.TrimSpace(value) {
+		return false
+	}
+	for index := 0; index < len(value); index++ {
+		if value[index] < 0x20 || value[index] == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 func commandError(status int, data []byte) error {

@@ -92,12 +92,8 @@ func (handler *HTTPHandler) ServeHTTP(response http.ResponseWriter, request *htt
 		writeHTTPProblem(response, http.StatusNotFound, "Not Found")
 		return
 	}
-	expectedMethod := http.MethodPost
-	if command == aep.CommandStatus {
-		expectedMethod = http.MethodGet
-	}
-	if request.Method != expectedMethod {
-		response.Header().Set("Allow", expectedMethod)
+	if !methodAllowed(request.Method, command == aep.CommandStatus) {
+		response.Header().Set("Allow", allowedMethods(command == aep.CommandStatus))
 		writeHTTPProblem(response, http.StatusMethodNotAllowed, "Method Not Allowed")
 		return
 	}
@@ -105,8 +101,8 @@ func (handler *HTTPHandler) ServeHTTP(response http.ResponseWriter, request *htt
 }
 
 func (handler *HTTPHandler) serveInspect(response http.ResponseWriter, request *http.Request) {
-	if request.Method != http.MethodGet {
-		response.Header().Set("Allow", http.MethodGet)
+	if !methodAllowed(request.Method, true) {
+		response.Header().Set("Allow", allowedMethods(true))
 		writeHTTPProblem(response, http.StatusMethodNotAllowed, "Method Not Allowed")
 		return
 	}
@@ -236,6 +232,23 @@ func commandAssertion(header http.Header) string {
 		return ""
 	}
 	return presentation.Credentials
+}
+
+// methodAllowed reports whether a request method may reach a safe (GET) or unsafe (POST)
+// endpoint. RFC 9110 requires a general-purpose server to answer HEAD wherever it answers GET;
+// net/http discards the response body for HEAD on its own, so the handlers stay identical.
+func methodAllowed(method string, safe bool) bool {
+	if !safe {
+		return method == http.MethodPost
+	}
+	return method == http.MethodGet || method == http.MethodHead
+}
+
+func allowedMethods(safe bool) string {
+	if !safe {
+		return http.MethodPost
+	}
+	return http.MethodGet + ", " + http.MethodHead
 }
 
 func singleHeaderValue(header http.Header, name string) (string, bool) {

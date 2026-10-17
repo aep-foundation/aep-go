@@ -1,6 +1,7 @@
 package aep
 
 import (
+	"encoding/json"
 	"math"
 	"net/url"
 	"regexp"
@@ -18,6 +19,12 @@ func ParseEnrollRequest(data []byte) (EnrollRequest, error) {
 	}, "/claims", "/idempotency_key")
 	if err == nil {
 		err = rejectEmptyStringPaths(data, "Enroll request", "/idempotency_key")
+	}
+	if err == nil && value.Claims != nil {
+		var fields map[string]json.RawMessage
+		if err = json.Unmarshal(data, &fields); err == nil {
+			_, err = ParseClaimValues(fields["claims"])
+		}
 	}
 	return value, err
 }
@@ -474,8 +481,13 @@ func validateStrings(values []string, path string, issues *[]ValidationIssue) {
 }
 
 func isProtectedResourceURI(value string, allowInsecureLoopback bool) bool {
+	// url.Parse records an empty fragment identically to no fragment, so the raw value decides.
+	// A bare "#" still makes the URI fragmented, which CORE-CA-025 requires a Service to reject.
+	if strings.ContainsRune(value, '#') || containsControlCharacter(value) {
+		return false
+	}
 	parsed, err := url.Parse(value)
-	if err != nil || parsed.Host == "" || parsed.Fragment != "" {
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.Opaque != "" {
 		return false
 	}
 	if parsed.Scheme == "https" {

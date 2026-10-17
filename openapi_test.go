@@ -16,6 +16,9 @@ func TestOpenAPIHelpers(t *testing.T) {
 }
 
 func TestOpenAPIHelpersRejectUnsafeOrAmbiguousInputs(t *testing.T) {
+	if _, err := MatchOpenAPIPath([]string{"/items/{id}"}, OpenAPIPathMatchOptions{Method: "GET", Path: "/items/", TrailingSlash: "strict"}); err == nil {
+		t.Fatal("empty path parameter matched a template")
+	}
 	if _, err := MatchOpenAPIPath([]string{"/items/{id}", "/items/{name}"}, OpenAPIPathMatchOptions{Method: "GET", Path: "/items/1", TrailingSlash: "strict"}); err == nil {
 		t.Fatal("equivalent OpenAPI templates were accepted")
 	}

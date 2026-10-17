@@ -53,19 +53,20 @@ func ProtectedResourceAuthorizationHeader(carrier ProtectedResourceCarrier) (str
 }
 
 func RenderProtectedResourceAuthorization(value ProtectedResourceAuthorization) (string, string, error) {
+	// Validation already resolves the carrier, so a header name is available once it returns.
 	if err := ValidateProtectedResourceAuthorization(value); err != nil {
 		return "", "", err
 	}
-	header, err := ProtectedResourceAuthorizationHeader(value.Carrier)
-	if err != nil {
-		return "", "", err
-	}
+	header, _ := ProtectedResourceAuthorizationHeader(value.Carrier)
 	return header, string(value.Scheme) + " " + value.Credentials, nil
 }
 
 func ValidateProtectedResourceAuthorization(value ProtectedResourceAuthorization) error {
 	if value.Credentials == "" {
 		return &AuthorizationCarrierError{Code: ErrorInvalidRequest, Text: "authorization credentials must not be empty"}
+	}
+	if !isCredentialToken(value.Credentials) {
+		return &AuthorizationCarrierError{Code: ErrorInvalidRequest, Text: "authorization credentials must be visible US-ASCII"}
 	}
 	if !isCredentialScheme(value.Scheme) {
 		return &AuthorizationCarrierError{Code: ErrorInvalidRequest, Text: "unsupported authorization scheme"}
@@ -84,15 +85,37 @@ func ParseProtectedResourceAuthorization(fieldValue string, carrier ProtectedRes
 	if carrier == ProtectedResourceDedicated && strings.Contains(fieldValue, ",") {
 		return ProtectedResourceAuthorization{}, &AuthorizationCarrierError{Code: ErrorNotRecognized, Text: "the dedicated authorization field is ambiguous"}
 	}
-	separator := strings.IndexByte(fieldValue, ' ')
-	if separator < 1 || separator == len(fieldValue)-1 || fieldValue[separator+1] == ' ' || fieldValue[separator+1] == '\t' {
-		return ProtectedResourceAuthorization{}, &AuthorizationCarrierError{Code: ErrorNotRecognized, Text: "the authorization presentation was not recognized"}
+	unrecognized := &AuthorizationCarrierError{Code: ErrorNotRecognized, Text: "the authorization presentation was not recognized"}
+	separator := strings.IndexAny(fieldValue, " \t")
+	if separator < 1 {
+		return ProtectedResourceAuthorization{}, unrecognized
 	}
 	scheme := canonicalCredentialScheme(fieldValue[:separator])
 	if scheme == "" {
-		return ProtectedResourceAuthorization{}, &AuthorizationCarrierError{Code: ErrorNotRecognized, Text: "the authorization presentation was not recognized"}
+		return ProtectedResourceAuthorization{}, unrecognized
 	}
-	return ProtectedResourceAuthorization{Carrier: carrier, Scheme: scheme, Credentials: fieldValue[separator+1:]}, nil
+	// CORE-AUTH-001 spells the separator 1*SP, so repeated spaces are part of the grammar rather
+	// than a malformed presentation, and a field value may carry trailing optional whitespace.
+	credentials := strings.TrimRight(strings.TrimLeft(fieldValue[separator:], " \t"), " \t")
+	if !isCredentialToken(credentials) {
+		return ProtectedResourceAuthorization{}, unrecognized
+	}
+	return ProtectedResourceAuthorization{Carrier: carrier, Scheme: scheme, Credentials: credentials}, nil
+}
+
+// isCredentialToken reports whether every byte is visible US-ASCII, the character set the AEP,
+// Bearer, and Basic credential grammars share. Rejecting anything else keeps a control character
+// or an embedded CRLF out of a value a caller may render back into a request header.
+func isCredentialToken(value string) bool {
+	if value == "" {
+		return false
+	}
+	for index := 0; index < len(value); index++ {
+		if value[index] < 0x21 || value[index] > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 func canonicalCredentialScheme(value string) CredentialScheme {

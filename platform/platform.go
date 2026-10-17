@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -66,9 +67,16 @@ func New(options Options) (*Platform, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := validateDIDURLTemplate(options.DIDHost, options.DIDPathPrefix, options.DIDURLTemplate); err != nil {
+		return nil, err
+	}
 	clock := options.Clock
 	if clock == nil {
 		clock = time.Now
+	}
+	discoveryETag, discoveryModified, err := discoveryValidators(discovery, clock())
+	if err != nil {
+		return nil, err
 	}
 	identityStore := options.IdentityStore
 	if identityStore == nil {
@@ -99,6 +107,8 @@ func New(options Options) (*Platform, error) {
 		didPathPrefix:       options.DIDPathPrefix,
 		didURLTemplate:      options.DIDURLTemplate,
 		discovery:           discovery,
+		discoveryETag:       discoveryETag,
+		discoveryModified:   discoveryModified,
 		hostedVerification:  options.HostedVerification,
 		identifier:          identifier,
 		idempotencyStore:    idempotencyStore,
@@ -113,8 +123,58 @@ func New(options Options) (*Platform, error) {
 	}, nil
 }
 
+// Discovery returns the Platform discovery document with the caching metadata PLT-DISC-012 asks
+// for. A freshness lifetime without validators is the weaker half of the contract: PLT-DISC-013
+// requires a client to honour conditional requests and 304 Not Modified, which it can only do once
+// the Platform hands it an entity tag. The document is fixed at construction, so both validators
+// are computed once from the bytes a caller will serialize.
 func (platform *Platform) Discovery() Result[DiscoveryDocument] {
-	return successResult(http.StatusOK, cloneDiscoveryDocument(platform.discovery), http.Header{"Cache-Control": []string{"max-age=300"}})
+	headers := make(http.Header, 3)
+	headers.Set("Cache-Control", "max-age=300")
+	headers.Set("ETag", platform.discoveryETag)
+	headers.Set("Last-Modified", platform.discoveryModified)
+	return successResult(http.StatusOK, cloneDiscoveryDocument(platform.discovery), headers)
+}
+
+func discoveryValidators(document DiscoveryDocument, modified time.Time) (string, string, error) {
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		return "", "", err
+	}
+	return entityTag(encoded), modified.UTC().Format(http.TimeFormat), nil
+}
+
+func entityTag(encoded []byte) string {
+	digest := sha256.Sum256(encoded)
+	return `"sha256:` + hex.EncodeToString(digest[:]) + `"`
+}
+
+// validateDIDURLTemplate checks that the advertised did_url_template names the same location a
+// Service reaches by resolving the minted Agent DID.
+//
+// The DID host, the DID path prefix, and the template are configured separately, so nothing stopped
+// a Platform from publishing a did_document_url no Service would ever fetch. PLT-DID-005 requires a
+// Service to be able to treat the Agent DID as an ordinary did:web DID, and PLT-DISC-006 requires
+// the template to describe where the Platform actually publishes those documents. Probing both with
+// one identifier settles it at construction instead of at the first Service handshake.
+func validateDIDURLTemplate(host string, pathPrefix string, template string) error {
+	const probe = "aep-platform-did-url-probe"
+	agentDID, err := CreateServiceScopedAgentDID(host, pathPrefix, probe)
+	if err != nil {
+		return err
+	}
+	rendered, err := renderDIDURL(template, probe)
+	if err != nil {
+		return err
+	}
+	resolved, err := aep.DIDWebDocumentURL(agentDID)
+	if err != nil {
+		return err
+	}
+	if rendered != resolved.String() {
+		return fmt.Errorf("AEP Platform DID URL template renders %s where resolving the minted Agent DID reaches %s", rendered, resolved)
+	}
+	return nil
 }
 
 func (platform *Platform) GetDIDDocument(ctx context.Context, agentDIDID string) (Result[DIDDocument], error) {
@@ -133,7 +193,14 @@ func (platform *Platform) GetDIDDocument(ctx context.Context, agentDIDID string)
 	if err != nil {
 		return Result[DIDDocument]{}, err
 	}
-	result := successResult(http.StatusOK, document, http.Header{"Cache-Control": []string{"max-age=300"}})
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		return Result[DIDDocument]{}, err
+	}
+	headers := make(http.Header, 2)
+	headers.Set("Cache-Control", "max-age=300")
+	headers.Set("ETag", entityTag(encoded))
+	result := successResult(http.StatusOK, document, headers)
 	result.ContentType = DIDMediaType
 	return result, nil
 }
@@ -184,14 +251,18 @@ func (platform *Platform) Provision(ctx context.Context, request ProvisionReques
 	if !isDID(request.ServiceDID) {
 		return problemResult[AgentIdentity](http.StatusBadRequest, aep.ErrorInvalidRequest, "service_did must be a DID."), nil
 	}
+	if requestContext.IdempotencyKey == "" || requestContext.Principal == "" {
+		return problemResult[AgentIdentity](http.StatusBadRequest, aep.ErrorInvalidRequest, "Idempotency-Key and authenticated principal are required."), nil
+	}
+	authorized, err := platform.authorizer.Authorize(ctx, AuthorizationRequest{Operation: AuthorizeProvision, ProvisionRequest: cloneProvisionRequest(&request)}, requestContext)
+	if err != nil {
+		return Result[AgentIdentity]{}, err
+	}
+	if !authorized {
+		return problemResult[AgentIdentity](http.StatusNotFound, aep.ErrorNotRecognized, "Identity not recognized."), nil
+	}
+	// Cached results remain private: authorization applies to every retry.
 	return executeIdempotent(ctx, IdempotentProvision, request, requestContext, platform.idempotencyStore, func() (Result[AgentIdentity], error) {
-		authorized, err := platform.authorizer.Authorize(ctx, AuthorizationRequest{Operation: AuthorizeProvision, ProvisionRequest: cloneProvisionRequest(&request)}, requestContext)
-		if err != nil {
-			return Result[AgentIdentity]{}, err
-		}
-		if !authorized {
-			return problemResult[AgentIdentity](http.StatusNotFound, aep.ErrorNotRecognized, "Identity not recognized."), nil
-		}
 		resolved, err := platform.serviceDIDResolver.ResolveServiceDID(ctx, request.ServiceDID)
 		if err != nil {
 			return Result[AgentIdentity]{}, err
@@ -218,19 +289,25 @@ func (platform *Platform) Sign(ctx context.Context, agentIdentityID string, requ
 		AgentIdentityID string      `json:"agent_identity_id"`
 		Request         SignRequest `json:"request"`
 	}{AgentIdentityID: agentIdentityID, Request: request}
+	if requestContext.IdempotencyKey == "" || requestContext.Principal == "" {
+		return problemResult[SignResponse](http.StatusBadRequest, aep.ErrorInvalidRequest, "Idempotency-Key and authenticated principal are required."), nil
+	}
+	identity, err := platform.authorizedIdentity(ctx, agentIdentityID, AuthorizationRequest{Operation: AuthorizeSign, SignRequest: cloneSignRequest(&request)}, requestContext)
+	if err != nil {
+		return Result[SignResponse]{}, err
+	}
+	if identity == nil || identity.ServiceDID != request.ServiceDID {
+		return problemResult[SignResponse](http.StatusNotFound, aep.ErrorNotRecognized, "Identity not recognized."), nil
+	}
 	return executeIdempotent(ctx, IdempotentSign, material, requestContext, platform.idempotencyStore, func() (Result[SignResponse], error) {
-		identity, err := platform.authorizedIdentity(ctx, agentIdentityID, AuthorizationRequest{Operation: AuthorizeSign, SignRequest: cloneSignRequest(&request)}, requestContext)
-		if err != nil {
-			return Result[SignResponse]{}, err
-		}
-		if identity == nil || identity.ServiceDID != request.ServiceDID {
-			return problemResult[SignResponse](http.StatusNotFound, aep.ErrorNotRecognized, "Identity not recognized."), nil
-		}
 		allowed, err := platform.lifecyclePolicy.CanSign(ctx, cloneIdentityRecord(*identity), requestContext)
 		if err != nil {
 			return Result[SignResponse]{}, err
 		}
-		if !allowed {
+		// PLT-LIFE-002 and PLT-SIGN-007 forbid signing for a revoked, suspended, or terminated
+		// identity outright, so the configured policy may only narrow what signing is permitted.
+		// Consulting it alone let a custom policy widen the rule back open.
+		if !allowed || identity.Status != ManagedAgentActive {
 			return problemResult[SignResponse](http.StatusForbidden, lifecycleErrorCode(identity.Status), "Identity cannot sign."), nil
 		}
 		if platform.signHandler != nil {
@@ -382,14 +459,36 @@ func (platform *Platform) validateSignRequest(request SignRequest) (time.Duratio
 	if request.LifetimeSeconds == "" {
 		return platform.defaultLifetime, nil
 	}
-	seconds, err := strconv.ParseInt(request.LifetimeSeconds, 10, 64)
-	if err != nil || seconds <= 0 {
+	seconds, ok := canonicalPositiveInteger(request.LifetimeSeconds)
+	if !ok {
 		return 0, errors.New("lifetime_seconds must be a positive integer string")
 	}
 	if seconds > int64(platform.maximumLifetime/time.Second) || seconds > int64(aep.MaxAssertionLifetime/time.Second) {
 		return 0, errors.New("lifetime_seconds exceeds the configured maximum")
 	}
 	return time.Duration(seconds) * time.Second, nil
+}
+
+// canonicalPositiveInteger reads an AEP-owned numeric value carried as a JSON string.
+//
+// PLT-SIGN-008 and PLT-SIGN-016 spell these as plain decimal digits, and their schemas pin the
+// grammar to `[1-9][0-9]*` within range. strconv also accepts a sign and leading zeros, so "+60"
+// and "0060" were read as 60 — two spellings of one value, which is exactly what a canonical
+// encoding rule exists to prevent.
+func canonicalPositiveInteger(value string) (int64, bool) {
+	if value == "" || value[0] < '1' || value[0] > '9' {
+		return 0, false
+	}
+	for index := 1; index < len(value); index++ {
+		if value[index] < '0' || value[index] > '9' {
+			return 0, false
+		}
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
 }
 
 func executeIdempotent[Body any](ctx context.Context, operation IdempotentOperation, material any, requestContext RequestContext, store IdempotencyStore, execute func() (Result[Body], error)) (Result[Body], error) {
@@ -400,7 +499,18 @@ func executeIdempotent[Body any](ctx context.Context, operation IdempotentOperat
 	if err != nil {
 		return Result[Body]{}, err
 	}
-	hash := sha256.Sum256(encoded)
+	// Decode RawMessage members so nested object ordering does not change the hash.
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return Result[Body]{}, err
+	}
+	canonical, err := json.Marshal(value)
+	if err != nil {
+		return Result[Body]{}, err
+	}
+	hash := sha256.Sum256(canonical)
 	result, err := store.ExecuteIdempotent(ctx, IdempotencyInput{
 		IdempotencyKey: requestContext.IdempotencyKey,
 		Operation:      operation,
@@ -599,6 +709,11 @@ func cloneSignResult(result Result[SignResponse]) Result[SignResponse] {
 }
 
 func validateSignResult(result Result[SignResponse], identity IdentityRecord, request SignRequest) error {
+	// PLT-SIGN-017 keeps the HTTP Retry-After header off this contract entirely, not only off the
+	// pending response: polling cadence is carried by retry_after_seconds in the body.
+	if result.Headers.Get("Retry-After") != "" {
+		return errors.New("AEP Platform sign handler must not send a Retry-After header")
+	}
 	if result.Problem != nil {
 		if result.ContentType != aep.ProblemMediaType || result.Status != result.Problem.Status {
 			return errors.New("AEP Platform sign handler returned an invalid Problem Details response")
@@ -606,8 +721,8 @@ func validateSignResult(result Result[SignResponse], identity IdentityRecord, re
 		return aep.ValidateProblemDetails(*result.Problem)
 	}
 	if result.Body.Status == SignPending {
-		seconds, err := strconv.Atoi(result.Body.RetryAfterSeconds)
-		if result.ContentType != aep.MediaType || result.Status != http.StatusAccepted || result.Headers.Get("Retry-After") != "" || err != nil || seconds < 1 || seconds > 300 {
+		seconds, ok := canonicalPositiveInteger(result.Body.RetryAfterSeconds)
+		if result.ContentType != aep.MediaType || result.Status != http.StatusAccepted || !ok || seconds > 300 {
 			return errors.New("AEP Platform sign handler returned an invalid pending response")
 		}
 		return nil
