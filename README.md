@@ -111,6 +111,10 @@ make conformance
 The command reads the adjacent `../aep-specs` checkout by default and writes role reports to
 `.conformance/reports/`. Set `AEP_SPECS_DIR` when the specifications are checked out elsewhere.
 
+The Service role includes the Service Documents profile. The Agent package provides validated
+document retrieval and acknowledgement handling; applications supply presentation, so the Agent
+role does not claim the profile's portable-presentation requirements.
+
 ## Development
 
 Go 1.26 or newer is required. Run the complete merge gate with:

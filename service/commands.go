@@ -30,14 +30,28 @@ func (service *Service) Enroll(ctx context.Context, body []byte, options Command
 		return problemResult[aep.EnrollResponse](aep.ErrorInvalidRequest, "Invalid request", http.StatusBadRequest), nil
 	}
 	return executeIdempotent(service, ctx, claims.Subject, IdempotentEnroll, options.IdempotencyKey, request, aep.ParseEnrollResponse, func() (Result[aep.EnrollResponse], error) {
+		if !service.supportsDocuments {
+			request.AcknowledgedDocumentIDs = nil
+		}
+		existing, findErr := service.enrollmentStore.FindEnrollment(ctx, claims.Subject)
+		if findErr != nil {
+			return Result[aep.EnrollResponse]{}, findErr
+		}
+		if existing != nil {
+			return service.updateEnrollment(ctx, request, *existing)
+		}
 		record, _, createErr := service.enrollmentStore.FindOrCreateEnrollment(ctx, claims.Subject, func() (EnrollmentRecord, error) {
 			var required []aep.ClaimName
 			if service.document.Claims != nil {
 				required = service.document.Claims.Required
 			}
 			missing := aep.MissingRequiredClaimNames(required, request.Claims)
-			if len(missing) != 0 {
-				return EnrollmentRecord{}, requirementsUnmetError{requirements: missing}
+			missingIDs := service.missingDocumentIDs(EnrollmentRecord{})
+			if request.AcknowledgedDocumentIDs != nil {
+				missingIDs = nil
+			}
+			if len(missing) != 0 || len(missingIDs) != 0 {
+				return EnrollmentRecord{}, requirementsUnmetError{requirements: missing, documentIDs: missingIDs}
 			}
 			now := service.clock()
 			decision, policyErr := service.enrollmentPolicy.DecideEnrollment(ctx, request, EnrollmentPolicyContext{Now: now})
@@ -50,7 +64,8 @@ func (service *Service) Enroll(ctx context.Context, body []byte, options Command
 			if !validEnrollmentDecisionStatus(decision.Status) {
 				return EnrollmentRecord{}, errors.New("AEP enrollment policy returned an invalid initial status")
 			}
-			candidate := enrollmentResponse(aep.AgentStatus(decision.Status), decision.OwnerActionRequired, decision.VerificationPending, decision.RequirementsPending)
+			ownerActionRequired := decision.OwnerActionRequired != nil && *decision.OwnerActionRequired
+			candidate := enrollmentResponse(aep.AgentStatus(decision.Status), ownerActionRequired, decision.VerificationPending, decision.RequirementsPending)
 			if err := aep.ValidateEnrollResponse(candidate); err != nil {
 				return EnrollmentRecord{}, err
 			}
@@ -65,27 +80,30 @@ func (service *Service) Enroll(ctx context.Context, body []byte, options Command
 			if cloneErr != nil {
 				return EnrollmentRecord{}, cloneErr
 			}
+			var acknowledged []string
+			if decision.Status != aep.EnrollmentRejected {
+				acknowledged = service.acceptedDocumentIDs(nil, request.AcknowledgedDocumentIDs)
+			}
 			return EnrollmentRecord{
-				AgentDID: claims.Subject, Claims: claimValues, CreatedAt: now, EnrollmentID: identifier,
-				OwnerActionRequired: decision.OwnerActionRequired, RequirementsPending: append([]string(nil), decision.RequirementsPending...),
+				AcknowledgedDocumentIDs: acknowledged,
+				AgentDID:                claims.Subject, Claims: claimValues, CreatedAt: now, EnrollmentID: identifier,
+				OwnerActionRequired: ownerActionRequired, RequirementsPending: append([]string(nil), decision.RequirementsPending...),
 				Since: now, Status: aep.AgentStatus(decision.Status), UpdatedAt: now, VerificationPending: append([]string(nil), decision.VerificationPending...),
 			}, nil
 		})
 		if createErr != nil {
 			var unmet requirementsUnmetError
 			if errors.As(createErr, &unmet) {
-				result := problemResult[aep.EnrollResponse](aep.ErrorRequirementsUnmet, "Requirements unmet", http.StatusUnprocessableEntity)
-				result.Problem.RequirementsPending = make([]string, len(unmet.requirements))
-				for index, requirement := range unmet.requirements {
-					result.Problem.RequirementsPending[index] = string(requirement)
-				}
-				return result, nil
+				return documentRequirements[aep.EnrollResponse](unmet.requirements, unmet.documentIDs), nil
 			}
 			return Result[aep.EnrollResponse]{}, createErr
 		}
 		response, lifecycle := enrollmentResult(record)
 		if lifecycle != nil {
 			return *lifecycle, nil
+		}
+		if response.Status != aep.AgentRejected {
+			response.AcknowledgedDocumentIDs = slices.Clone(request.AcknowledgedDocumentIDs)
 		}
 		if err := aep.ValidateEnrollResponse(response); err != nil {
 			return Result[aep.EnrollResponse]{}, err
@@ -96,6 +114,7 @@ func (service *Service) Enroll(ctx context.Context, body []byte, options Command
 
 type requirementsUnmetError struct {
 	requirements []aep.ClaimName
+	documentIDs  []string
 }
 
 func (requirementsUnmetError) Error() string {
@@ -150,6 +169,11 @@ func (service *Service) Grant(ctx context.Context, body []byte, options CommandO
 		}
 		if record.Status != aep.AgentActive {
 			return grantLifecycleProblem[json.RawMessage](*record), nil
+		}
+		missingClaims := service.missingClaims(record.Claims)
+		missingIDs := service.missingDocumentIDs(*record)
+		if len(missingClaims) != 0 || len(missingIDs) != 0 {
+			return documentRequirements[json.RawMessage](missingClaims, missingIDs), nil
 		}
 		enrollment, cloneErr := cloneEnrollment(*record)
 		if cloneErr != nil {

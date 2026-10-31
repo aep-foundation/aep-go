@@ -37,7 +37,7 @@ func TestCommandFailureIncludesProblemDetails(t *testing.T) {
 	}
 }
 
-func TestEnrollRejectsUnsatisfiedRequiredClaimsBeforeCommand(t *testing.T) {
+func TestEnrollLetsServiceEvaluateStoredRequiredClaims(t *testing.T) {
 	var commandCalls atomic.Int32
 	var serviceDID string
 	server := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
@@ -56,12 +56,11 @@ func TestEnrollRejectsUnsatisfiedRequiredClaimsBeforeCommand(t *testing.T) {
 	client := testClient(t, server, newTestIdentityProvider(t))
 	session, _ := client.Service(server.URL)
 	_, err := session.Enroll(context.Background(), EnrollOptions{})
-	var requirements *ClaimRequirementsError
-	if !errors.As(err, &requirements) || len(requirements.MissingRequiredClaimNames) != 1 || requirements.MissingRequiredClaimNames[0] != aep.ClaimContactEmail {
-		t.Fatalf("unexpected Claim requirements error: %#v, %v", requirements, err)
+	if err != nil {
+		t.Fatalf("Service could not evaluate existing enrollment: %v", err)
 	}
-	if commandCalls.Load() != 0 {
-		t.Fatal("Enroll command was sent with unsatisfied required claims")
+	if commandCalls.Load() != 1 {
+		t.Fatal("Enroll did not reach the Service")
 	}
 }
 

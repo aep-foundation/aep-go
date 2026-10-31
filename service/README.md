@@ -56,6 +56,30 @@ Claims: &aep.InspectClaims{
 
 An `EnrollmentPolicy` decides whether a valid request becomes active, pending, or rejected. The policy receives validated Claim Values and can apply application-specific requirements.
 
+## Service documents and repeated enrollment
+
+Configure `Options.ServiceDocuments` to advertise the extension and its documents:
+
+```go
+ServiceDocuments: []aep.ServiceDocument{{
+	ID: "general-terms", Type: "terms_of_service", Title: "General terms",
+	Enrollment: "required",
+	Representations: []aep.DocumentRepresentation{{
+		MediaType: "text/html", URL: "https://service.example/legal/terms",
+	}},
+}},
+```
+
+Use nil to disable the extension or an empty non-nil slice to support acknowledgements without publishing a document list. Each document needs an HTTPS HTML link. Document types are open strings; `aep.PreferredServiceDocumentTypes()` returns the conventional types. The catalog permits seven documents with identifiers of at most 32 ASCII characters.
+
+Repeated Enroll evaluates the existing policy callback. Custom policies query their own authoritative storage when needed; the callback receives the request and current time, not an enrollment hint. The SDK merges supplied claims and accepted document identifiers while preserving the enrollment identity, creation time, status, and issued credentials. A policy can return `UpdateExisting` pointing to false to leave the record unchanged, or reject the update without modifying the stored enrollment.
+
+Decision metadata is optional. On initial enrollment, nil `OwnerActionRequired` defaults to false and nil pending lists default to empty. On repeated enrollment, nil preserves the stored field, a boolean pointer explicitly sets true or false, and a non-nil list replaces the stored list (including an empty list to clear it). Stored enrollment fields remain concrete values.
+
+Durable enrollment stores must persist `AcknowledgedDocumentIDs` and `RequiredDocumentIDs`. The latter lets the Service require renewed acknowledgement of an existing document. The Service owns its document-change policy and any notifications. Grant checks current required claims and document identifiers before issuing credentials and returns `requirements_unmet` when they are missing.
+
+An explicit acknowledgement declaration is echoed without expansion, even if the catalog includes another required document. That later requirement can block a subsequent Grant; it does not invalidate the supplied enrollment declaration. Omitted declarations do not imply acceptance. Same-key retries replay the existing result; a separate explicit Enroll uses a new idempotency key.
+
 ## Credentials
 
 Session credentials are optional. Configure a built-in profile with an issuer and a `ServiceCredentialStore`:

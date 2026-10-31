@@ -404,13 +404,30 @@ func TestCommandRejectsOversizedResponse(t *testing.T) {
 	}
 }
 
-func TestEnrollRejectsMissingRequiredClaims(t *testing.T) {
-	stub := newServiceStub(t, nil)
+func TestEnrollPreservesServiceMissingClaimsError(t *testing.T) {
+	stub := newServiceStub(t, func(response http.ResponseWriter, request *http.Request) bool {
+		if request.URL.Path != "/aep/enroll" {
+			return false
+		}
+		var body aep.EnrollRequest
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if body.Claims != nil && body.Claims.ContactEmail != nil {
+			response.Header().Set("Content-Type", aep.MediaType)
+			_, _ = response.Write([]byte(`{"status":"active"}`))
+			return true
+		}
+		response.Header().Set("Content-Type", aep.ProblemMediaType)
+		response.WriteHeader(422)
+		_, _ = response.Write([]byte(`{"code":"requirements_unmet","status":422,"title":"Requirements unmet","type":"urn:aep:error:requirements_unmet","requirements_pending":["contact.email"]}`))
+		return true
+	})
 	stub.document.Claims = &aep.InspectClaims{Required: []aep.ClaimName{aep.ClaimContactEmail}}
 
 	_, err := stub.session.Enroll(context.Background(), EnrollOptions{})
-	var claimErr *ClaimRequirementsError
-	if !errors.As(err, &claimErr) || len(claimErr.MissingRequiredClaimNames) != 1 {
+	var claimErr *CommandError
+	if !errors.As(err, &claimErr) || claimErr.Problem == nil || len(claimErr.Problem.RequirementsPending) != 1 || claimErr.Problem.RequirementsPending[0] != "contact.email" {
 		t.Fatalf("missing required claims were not reported: %v", err)
 	}
 
