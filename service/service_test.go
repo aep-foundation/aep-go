@@ -49,7 +49,7 @@ func TestServiceCommandsAndIdempotency(t *testing.T) {
 		t.Fatalf("unexpected enrollment result: %#v, %v", enrolled, err)
 	}
 	repeated, err := service.Enroll(context.Background(), enrollBody, commandOptions(aep.AssertionEnroll, "enroll-2", "another-key"))
-	if err != nil || repeated.Body.Status != aep.AgentActive || policyCalls.Load() != 1 {
+	if err != nil || repeated.Body.Status != aep.AgentActive || policyCalls.Load() != 2 {
 		t.Fatalf("existing enrollment was not stable: %#v, %v", repeated, err)
 	}
 

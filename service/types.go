@@ -47,16 +47,18 @@ type ReplayStore interface {
 }
 
 type EnrollmentRecord struct {
-	AgentDID            string
-	Claims              *aep.ClaimValues
-	CreatedAt           time.Time
-	EnrollmentID        string
-	OwnerActionRequired bool
-	RequirementsPending []string
-	Since               time.Time
-	Status              aep.AgentStatus
-	UpdatedAt           time.Time
-	VerificationPending []string
+	AcknowledgedDocumentIDs []string
+	RequiredDocumentIDs     []string
+	AgentDID                string
+	Claims                  *aep.ClaimValues
+	CreatedAt               time.Time
+	EnrollmentID            string
+	OwnerActionRequired     bool
+	RequirementsPending     []string
+	Since                   time.Time
+	Status                  aep.AgentStatus
+	UpdatedAt               time.Time
+	VerificationPending     []string
 }
 
 type EnrollmentStore interface {
@@ -66,7 +68,8 @@ type EnrollmentStore interface {
 }
 
 type EnrollmentDecision struct {
-	OwnerActionRequired bool
+	UpdateExisting      *bool
+	OwnerActionRequired *bool
 	RequirementsPending []string
 	Status              aep.EnrollmentStatus
 	VerificationPending []string
@@ -262,6 +265,7 @@ type clientAssertionOptions struct {
 }
 
 type Options struct {
+	ServiceDocuments      []aep.ServiceDocument
 	AuthenticationMethods []aep.AuthenticationMethod
 	ClientAssertion       ClientAssertionOptions
 	ClaimValueLimits      *ClaimValueLimits
@@ -284,6 +288,7 @@ type Options struct {
 }
 
 type Service struct {
+	supportsDocuments     bool
 	authenticationMethods []aep.AuthenticationMethod
 	clientAssertion       clientAssertionOptions
 	claimValueLimits      ClaimValueLimits

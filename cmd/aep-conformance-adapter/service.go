@@ -22,13 +22,16 @@ import (
 
 var serviceNow = time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 
-type conformanceEnrollmentPolicy struct{ calls *atomic.Int32 }
+type conformanceEnrollmentPolicy struct {
+	calls          *atomic.Int32
+	updateExisting *bool
+}
 
 func (policy conformanceEnrollmentPolicy) DecideEnrollment(context.Context, aep.EnrollRequest, service.EnrollmentPolicyContext) (service.EnrollmentDecision, error) {
 	if policy.calls != nil {
 		policy.calls.Add(1)
 	}
-	return service.EnrollmentDecision{Status: aep.EnrollmentActive}, nil
+	return service.EnrollmentDecision{Status: aep.EnrollmentActive, UpdateExisting: policy.updateExisting}, nil
 }
 
 type conformanceGrantHandler struct{}
@@ -92,6 +95,9 @@ func serviceCommandOptionsForAgent(_ aep.AssertionOperation, key string, agentDI
 }
 
 func evaluateService(request adapterRequest) (bool, error) {
+	if request.Vector.Category == "service-documents" {
+		return evaluateServiceDocuments(request)
+	}
 	switch request.Vector.ID {
 	case "response-active", "response-pending-verification-owner-action", "response-pending-requirements", "revoke-response-empty",
 		"not-recognized-problem", "requirements-unmet-problem", "verification-pending-problem":
@@ -155,7 +161,8 @@ func evaluateServiceCommandResponse(request adapterRequest) (bool, error) {
 		}
 		method, path, body = http.MethodGet, "/aep/status", ""
 	case request.Vector.ID == "response-pending-verification-owner-action":
-		policy = service.NewStaticEnrollmentPolicy(service.EnrollmentDecision{Status: aep.EnrollmentPending, OwnerActionRequired: true, VerificationPending: []string{"contact.email"}})
+		ownerActionRequired := true
+		policy = service.NewStaticEnrollmentPolicy(service.EnrollmentDecision{Status: aep.EnrollmentPending, OwnerActionRequired: &ownerActionRequired, VerificationPending: []string{"contact.email"}})
 	case request.Vector.ID == "revoke-response-empty":
 		path, body = "/aep/revoke", `{"all_grant_types":"true"}`
 	case request.Vector.ID == "not-recognized-problem":
@@ -337,8 +344,9 @@ func evaluateRepeatedEnrollment(request adapterRequest) (bool, error) {
 			Issuer: enrollRequest.AgentDID, JWTID: "repeated-existing", Operation: verification.Operation, Resource: verification.Resource, Subject: enrollRequest.AgentDID,
 		}, nil
 	}
+	updateExisting := false
 	instance, err := newConfiguredConformanceService(
-		conformanceEnrollmentPolicy{calls: &calls}, nil,
+		conformanceEnrollmentPolicy{calls: &calls, updateExisting: &updateExisting}, nil,
 		[]service.GrantTypeDefinition{{GrantType: "custom-session", Handler: conformanceGrantHandler{}}}, verifier, store,
 	)
 	if err != nil {

@@ -144,8 +144,9 @@ type CommandResult[T any] struct {
 }
 
 type EnrollOptions struct {
-	Claims         *aep.ClaimValues
-	IdempotencyKey string
+	AcknowledgedDocumentIDs []string
+	Claims                  *aep.ClaimValues
+	IdempotencyKey          string
 }
 
 type GrantOptions struct {

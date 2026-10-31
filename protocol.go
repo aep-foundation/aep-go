@@ -16,7 +16,7 @@ func ParseEnrollRequest(data []byte) (EnrollRequest, error) {
 	var value EnrollRequest
 	err := parseAndValidate(data, "Enroll request", &value, func() error {
 		return ValidateEnrollRequest(value)
-	}, "/claims", "/idempotency_key")
+	}, "/claims", "/idempotency_key", "/acknowledged_document_ids")
 	if err == nil {
 		err = rejectEmptyStringPaths(data, "Enroll request", "/idempotency_key")
 	}
@@ -31,6 +31,7 @@ func ParseEnrollRequest(data []byte) (EnrollRequest, error) {
 
 func ValidateEnrollRequest(value EnrollRequest) error {
 	issues := make([]ValidationIssue, 0)
+	appendValidationIssues(ValidateDocumentIDs(value.AcknowledgedDocumentIDs), &issues)
 	requireNonEmpty(value.AgentDID, "$.agent_did", &issues)
 	if value.Claims != nil {
 		appendValidationIssues(ValidateClaimValues(*value.Claims), &issues)
@@ -42,12 +43,13 @@ func ParseEnrollResponse(data []byte) (EnrollResponse, error) {
 	var value EnrollResponse
 	err := parseAndValidate(data, "Enroll response", &value, func() error {
 		return ValidateEnrollResponse(value)
-	}, "/owner_action_required", "/verification_pending", "/requirements_pending")
+	}, "/owner_action_required", "/verification_pending", "/requirements_pending", "/acknowledged_document_ids")
 	return value, err
 }
 
 func ValidateEnrollResponse(value EnrollResponse) error {
 	issues := make([]ValidationIssue, 0)
+	appendValidationIssues(ValidateDocumentIDs(value.AcknowledgedDocumentIDs), &issues)
 	switch value.Status {
 	case AgentActive, AgentPending, AgentRejected, AgentSuspended, AgentTerminated, AgentUnavailable:
 	default:
@@ -246,12 +248,18 @@ func ParseProblemDetails(data []byte) (ProblemDetails, error) {
 	var value ProblemDetails
 	err := parseAndValidate(data, "Problem Details", &value, func() error {
 		return ValidateProblemDetails(value)
-	}, "/detail", "/instance", "/owner_action_required", "/requirements_pending", "/verification_pending")
+	}, "/detail", "/instance", "/owner_action_required", "/requirements_pending", "/verification_pending", "/required_document_ids")
 	return value, err
 }
 
 func ValidateProblemDetails(value ProblemDetails) error {
 	issues := make([]ValidationIssue, 0)
+	if value.RequiredDocumentIDs != nil || contains(value.RequirementsPending, "service_documents") {
+		appendValidationIssues(ValidateDocumentIDs(value.RequiredDocumentIDs), &issues)
+		if len(value.RequiredDocumentIDs) == 0 || value.Code != ErrorRequirementsUnmet || value.Status != 422 || !contains(value.RequirementsPending, "service_documents") {
+			issues = append(issues, ValidationIssue{Path: "$.required_document_ids", Message: "Document requirements require requirements_unmet, status 422, and service_documents."})
+		}
+	}
 	if value.Type != "urn:aep:error:"+string(value.Code) {
 		issues = append(issues, ValidationIssue{Path: "$.type", Message: "Expected an AEP error URN matching code."})
 	}

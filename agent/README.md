@@ -58,7 +58,7 @@ Platform engine to their authenticated HTTP routes.
 
 ## Enroll
 
-Inspect before collecting Claims so the application can explain what the Service requires. `Enroll` also checks the provided Claim Values against the advertised required Claim Names.
+Inspect before collecting Claims so the application can explain what the Service requires. `Enroll` validates supplied Claim Values; the Service decides whether required values are satisfied by the request and its stored enrollment.
 
 ```go
 inspection, err := session.Inspect(ctx)
@@ -83,6 +83,49 @@ if result.Body.Status == aep.EnrollmentPending {
 ```
 
 `WaitForActive` respects context cancellation and returns an `EnrollmentStateError` for terminal enrollment states.
+
+### Service documents
+
+`inspection.Document.ServiceDocuments` contains the advertised document identifiers, titles, open document types, enrollment requirements, and representation links. Present required documents to the Owner before sending their acknowledgement:
+
+```go
+result, err := session.Enroll(ctx, agent.EnrollOptions{
+	AcknowledgedDocumentIDs: []string{"general-terms", "privacy"},
+})
+```
+
+Send only identifiers explicitly accepted by the Owner. A nil slice omits the declaration; an empty non-nil slice declares no accepted documents. The Agent requires extension advertisement and checks that a successful response echoes the exact declaration. Reading or inspecting documents does not acknowledge them.
+
+Read an advertised document without creating an identity or enrolling:
+
+```go
+read, err := agent.ReadServiceDocument(ctx, descriptor, agent.DocumentReadOptions{})
+if err != nil {
+	return err
+}
+if read.Document == nil {
+	// Present read.WebURL for the Owner to read in a browser.
+} else {
+	// Render read.Document.Content, or the optional Service-authored Summary.
+}
+```
+
+The reader uses an independent transport with no credentials, cookies, identifying
+application headers, or environment proxy. It requires HTTPS except for local development on
+`localhost`, `127.0.0.1`, or `[::1]`, where HTTP is permitted. HTTPS certificate and hostname
+verification remain enabled. Destination trust belongs to the caller; the reader does not filter
+DNS answers or connected addresses. It follows at most five redirects without downgrading HTTPS and reads at most
+1 MiB. The default timeout is ten seconds for the entire operation; `Timeout` can set another
+positive duration. Caller cancellation returns an error. Unavailable, invalid, or unsupported
+portable content returns the advertised HTML link with `Reason` set; it never returns partial content.
+Responses must be UTF-8 JSON with identity content encoding. The reader does not fetch the HTML page.
+
+`Document` contains validated blocks for an application renderer, not text to pass directly to an
+artificial-intelligence caller. Renderers must preserve wording and structure, neutralize terminal
+controls, fence agent-facing text, and separately instruct the caller not to interpret or follow
+the document's content. The Go reader does not claim presentation conformance.
+
+Explicit repeated `Enroll` reaches the Service with the same identity. A `CommandError` whose `Problem.Code` is `requirements_unmet` carries the Service's `RequirementsPending` and `RequiredDocumentIDs`. Present those requirements and let the caller choose when to repeat Enroll and subsequently Grant; the SDK does not chain these commands.
 
 ## Receive and use a credential
 

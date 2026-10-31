@@ -73,17 +73,18 @@ type ServiceIdentity struct {
 }
 
 type InspectDocument struct {
-	AEPVersion     string            `json:"aep_version"`
-	Authentication *Authentication   `json:"authentication,omitempty"`
-	Bindings       Bindings          `json:"bindings"`
-	Claims         *InspectClaims    `json:"claims,omitempty"`
-	Commands       Commands          `json:"commands"`
-	Core           Core              `json:"core"`
-	Extensions     *Extensions       `json:"extensions,omitempty"`
-	HTTP           HTTPConfiguration `json:"http"`
-	Identity       Identity          `json:"identity"`
-	Service        ServiceIdentity   `json:"service"`
-	Additional     AdditionalMembers `json:"-"`
+	AEPVersion       string            `json:"aep_version"`
+	Authentication   *Authentication   `json:"authentication,omitempty"`
+	Bindings         Bindings          `json:"bindings"`
+	Claims           *InspectClaims    `json:"claims,omitempty"`
+	Commands         Commands          `json:"commands"`
+	Core             Core              `json:"core"`
+	Extensions       *Extensions       `json:"extensions,omitempty"`
+	HTTP             HTTPConfiguration `json:"http"`
+	Identity         Identity          `json:"identity"`
+	Service          ServiceIdentity   `json:"service"`
+	ServiceDocuments []ServiceDocument `json:"service_documents,omitzero"`
+	Additional       AdditionalMembers `json:"-"`
 }
 
 type ContactAddressPrimary struct {
@@ -130,18 +131,20 @@ const (
 )
 
 type EnrollRequest struct {
-	AgentDID       string            `json:"agent_did"`
-	Claims         *ClaimValues      `json:"claims,omitempty"`
-	IdempotencyKey string            `json:"idempotency_key,omitempty"`
-	Additional     AdditionalMembers `json:"-"`
+	AcknowledgedDocumentIDs []string          `json:"acknowledged_document_ids,omitzero"`
+	AgentDID                string            `json:"agent_did"`
+	Claims                  *ClaimValues      `json:"claims,omitempty"`
+	IdempotencyKey          string            `json:"idempotency_key,omitempty"`
+	Additional              AdditionalMembers `json:"-"`
 }
 
 type EnrollResponse struct {
-	Status              AgentStatus       `json:"status"`
-	OwnerActionRequired *string           `json:"owner_action_required,omitempty"`
-	VerificationPending []string          `json:"verification_pending,omitempty"`
-	RequirementsPending []string          `json:"requirements_pending,omitempty"`
-	Additional          AdditionalMembers `json:"-"`
+	AcknowledgedDocumentIDs []string          `json:"acknowledged_document_ids,omitzero"`
+	Status                  AgentStatus       `json:"status"`
+	OwnerActionRequired     *string           `json:"owner_action_required,omitempty"`
+	VerificationPending     []string          `json:"verification_pending,omitempty"`
+	RequirementsPending     []string          `json:"requirements_pending,omitempty"`
+	Additional              AdditionalMembers `json:"-"`
 }
 
 type StatusResponse struct {
@@ -214,6 +217,7 @@ const (
 )
 
 type ProblemDetails struct {
+	RequiredDocumentIDs []string          `json:"required_document_ids,omitzero"`
 	Type                string            `json:"type"`
 	Title               string            `json:"title"`
 	Status              int               `json:"status"`

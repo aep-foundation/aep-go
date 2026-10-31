@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -20,23 +21,21 @@ func (session *Session) Enroll(ctx context.Context, options EnrollOptions) (Comm
 	if err != nil {
 		return CommandResult[aep.EnrollResponse]{}, err
 	}
-	var required []aep.ClaimName
-	if inspection.Document.Claims != nil {
-		required = inspection.Document.Claims.Required
-	}
-	missing := aep.MissingRequiredClaimNames(required, options.Claims)
-	if len(missing) != 0 {
-		return CommandResult[aep.EnrollResponse]{}, &ClaimRequirementsError{MissingRequiredClaimNames: append([]aep.ClaimName(nil), missing...)}
+	if options.AcknowledgedDocumentIDs != nil && (inspection.Document.Extensions == nil || !slices.Contains(inspection.Document.Extensions.Supported, aep.ServiceDocumentsExtension)) {
+		return CommandResult[aep.EnrollResponse]{}, errors.New("AEP Service does not advertise Service Documents")
 	}
 	key, err := session.idempotencyKey(ctx, inspection, OperationKey{Command: aep.CommandEnroll}, options.IdempotencyKey)
 	if err != nil {
 		return CommandResult[aep.EnrollResponse]{}, err
 	}
-	requestBody := aep.EnrollRequest{AgentDID: identity.AgentDID, Claims: options.Claims, IdempotencyKey: key}
+	requestBody := aep.EnrollRequest{AgentDID: identity.AgentDID, Claims: options.Claims, IdempotencyKey: key, AcknowledgedDocumentIDs: slices.Clone(options.AcknowledgedDocumentIDs)}
 	if err := aep.ValidateEnrollRequest(requestBody); err != nil {
 		return CommandResult[aep.EnrollResponse]{}, err
 	}
 	result, err := executeCommand(session, ctx, inspection, identity, signer, aep.CommandEnroll, http.MethodPost, requestBody, key, aep.ParseEnrollResponse)
+	if err == nil && result.Body.Status != aep.AgentRejected && ((result.Body.AcknowledgedDocumentIDs == nil) != (requestBody.AcknowledgedDocumentIDs == nil) || !slices.Equal(result.Body.AcknowledgedDocumentIDs, requestBody.AcknowledgedDocumentIDs)) {
+		return CommandResult[aep.EnrollResponse]{}, errors.New("AEP enrollment document acknowledgement does not match the request")
+	}
 	if err == nil {
 		session.recordEnrollment(identity, result.Body.Status)
 	}

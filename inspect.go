@@ -20,7 +20,7 @@ func ParseInspectDocument(data []byte) (InspectDocument, error) {
 	if err := decodeOne(data, &document); err != nil {
 		return InspectDocument{}, wrapDecodeError("Inspect document", err)
 	}
-	if err := rejectNullPaths(data, "Inspect document", "/authentication", "/claims", "/commands/grant_types_config", "/extensions", "/http/openapi"); err != nil {
+	if err := rejectNullPaths(data, "Inspect document", "/authentication", "/claims", "/commands/grant_types_config", "/extensions", "/http/openapi", "/service_documents"); err != nil {
 		return InspectDocument{}, err
 	}
 	if err := ValidateInspectDocument(document); err != nil {
@@ -31,6 +31,12 @@ func ParseInspectDocument(data []byte) (InspectDocument, error) {
 
 func ValidateInspectDocument(document InspectDocument) error {
 	issues := make([]ValidationIssue, 0)
+	if document.ServiceDocuments != nil {
+		appendValidationIssues(ValidateServiceDocuments(document.ServiceDocuments), &issues)
+		if document.Extensions == nil || !contains(document.Extensions.Supported, ServiceDocumentsExtension) {
+			issues = append(issues, ValidationIssue{Path: "$.service_documents", Message: "Service Documents extension must be advertised."})
+		}
+	}
 	if !versionPattern.MatchString(document.AEPVersion) {
 		issues = append(issues, ValidationIssue{Path: "$.aep_version", Message: "Expected major.minor version syntax."})
 	} else if !IsVersionCompatible(document.AEPVersion, Version) {

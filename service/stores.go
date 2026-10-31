@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -240,21 +241,31 @@ type staticEnrollmentPolicy struct {
 }
 
 func NewStaticEnrollmentPolicy(decision EnrollmentDecision) EnrollmentPolicy {
+	if decision.OwnerActionRequired != nil {
+		value := *decision.OwnerActionRequired
+		decision.OwnerActionRequired = &value
+	}
 	return staticEnrollmentPolicy{decision: decision}
 }
 
 func (policy staticEnrollmentPolicy) DecideEnrollment(context.Context, aep.EnrollRequest, EnrollmentPolicyContext) (EnrollmentDecision, error) {
 	decision := policy.decision
+	if decision.OwnerActionRequired != nil {
+		value := *decision.OwnerActionRequired
+		decision.OwnerActionRequired = &value
+	}
 	if decision.Status == "" {
 		decision.Status = aep.EnrollmentActive
 	}
-	decision.RequirementsPending = append([]string(nil), decision.RequirementsPending...)
-	decision.VerificationPending = append([]string(nil), decision.VerificationPending...)
+	decision.RequirementsPending = slices.Clone(decision.RequirementsPending)
+	decision.VerificationPending = slices.Clone(decision.VerificationPending)
 	return decision, nil
 }
 
 func cloneEnrollment(record EnrollmentRecord) (EnrollmentRecord, error) {
 	copy := record
+	copy.AcknowledgedDocumentIDs = append([]string(nil), record.AcknowledgedDocumentIDs...)
+	copy.RequiredDocumentIDs = append([]string(nil), record.RequiredDocumentIDs...)
 	copy.RequirementsPending = append([]string(nil), record.RequirementsPending...)
 	copy.VerificationPending = append([]string(nil), record.VerificationPending...)
 	if record.Claims != nil {

@@ -75,6 +75,23 @@ func New(options Options) (*Service, error) {
 	if len(authenticationMethods) != 0 {
 		document.Authentication = &aep.Authentication{Methods: authenticationMethods}
 	}
+	if options.ServiceDocuments != nil {
+		if document.Extensions == nil {
+			document.Extensions = &aep.Extensions{}
+		}
+		if !slices.Contains(document.Extensions.Supported, aep.ServiceDocumentsExtension) {
+			document.Extensions.Supported = append(document.Extensions.Supported, aep.ServiceDocumentsExtension)
+		}
+		if len(options.ServiceDocuments) > 0 {
+			data, encodeErr := json.Marshal(options.ServiceDocuments)
+			if encodeErr != nil {
+				return nil, encodeErr
+			}
+			if decodeErr := json.Unmarshal(data, &document.ServiceDocuments); decodeErr != nil {
+				return nil, decodeErr
+			}
+		}
+	}
 	if err := aep.ValidateInspectDocument(document); err != nil {
 		return nil, err
 	}
@@ -115,6 +132,7 @@ func New(options Options) (*Service, error) {
 		identifier = randomIdentifier
 	}
 	return &Service{
+		supportsDocuments:     options.ServiceDocuments != nil,
 		authenticationMethods: authenticationMethods,
 		clientAssertion:       clientAssertion,
 		claimValueLimits:      claimValueLimits,
