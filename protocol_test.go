@@ -116,6 +116,14 @@ func TestCanonicalOwnerActionSerialization(t *testing.T) {
 }
 
 func TestGrantResponses(t *testing.T) {
+	for _, tokenType := range []string{"Bearer", "bearer", "BEARER", "bEaReR", "Basic", " Bearer", "Bearer ", "Bearer\n", ""} {
+		value := OAuthBearerGrantResponse{AccessToken: "CaseSensitiveToken", CredentialID: "id", ExpiresAt: "2027-01-01T00:00:00Z", TokenType: tokenType}
+		err := ValidateOAuthBearerGrantResponse(value)
+		valid := tokenType == "Bearer" || tokenType == "bearer" || tokenType == "BEARER" || tokenType == "bEaReR"
+		if (err == nil) != valid {
+			t.Fatalf("unexpected validation for token type %q: %v", tokenType, err)
+		}
+	}
 	response, err := ParseBuiltInGrantResponse(GrantTypeOAuthBearer, []byte(`{
 		"access_token":"token",
 		"credential_id":"credential-1",
@@ -144,11 +152,23 @@ func TestGrantResponses(t *testing.T) {
 }
 
 func TestBuiltInCredentialPresentationValuesAreSafe(t *testing.T) {
+	for _, fields := range []string{`"username":"","password":""`, `"username":"u","password":""`, `"username":"","password":"p"`} {
+		body := []byte(`{"credential_id":"basic","expires_at":"2027-01-01T00:00:00Z","realm":"",` + fields + `}`)
+		if _, err := ParseBuiltInGrantResponse(GrantTypeBasic, body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, fields := range []string{`"username":""`, `"password":""`, `"username":null,"password":""`, `"username":"","password":null`, `"username":5,"password":""`} {
+		body := []byte(`{"credential_id":"basic","expires_at":"2027-01-01T00:00:00Z",` + fields + `}`)
+		if _, err := ParseBuiltInGrantResponse(GrantTypeBasic, body); err == nil {
+			t.Fatalf("invalid Basic fields accepted: %s", fields)
+		}
+	}
 	apiKey := APIKeyGrantResponse{
-		APIKey: "secret value", CredentialID: "credential-1", ExpiresAt: "2027-01-01T00:00:00Z", Header: "x-api-key",
+		APIKey: "secret\tvalue", CredentialID: "credential-1", ExpiresAt: "2027-01-01T00:00:00Z", Header: "x-api-key",
 	}
 	if err := ValidateAPIKeyGrantResponse(apiKey); err == nil {
-		t.Fatal("API key containing whitespace was accepted")
+		t.Fatal("API key containing a control character was accepted")
 	}
 	apiKey.APIKey = "safe-secret"
 	apiKey.Header = "invalid header"
@@ -165,6 +185,21 @@ func TestBuiltInCredentialPresentationValuesAreSafe(t *testing.T) {
 	basic.Password = "secret\n"
 	if err := ValidateBasicGrantResponse(basic); err == nil {
 		t.Fatal("Basic password containing a control character was accepted")
+	}
+}
+
+func TestAPIKeyFieldValue(t *testing.T) {
+	for _, value := range []string{"k", "Bearer secret", "Basic dXNlcjpwYXNz", "two  spaces", "key,\";\\value"} {
+		response := APIKeyGrantResponse{APIKey: value, CredentialID: "key", ExpiresAt: "2027-01-01T00:00:00Z", Header: "Authorization"}
+		if err := ValidateAPIKeyGrantResponse(response); err != nil {
+			t.Fatalf("rejected valid field value %q: %v", value, err)
+		}
+	}
+	for _, value := range []string{"", " key", "key ", "key\n", "key\r\nInjected: value", "key\tvalue", "key\x00", "key\x7f", "kéy"} {
+		response := APIKeyGrantResponse{APIKey: value, CredentialID: "key", ExpiresAt: "2027-01-01T00:00:00Z", Header: "Authorization"}
+		if err := ValidateAPIKeyGrantResponse(response); err == nil {
+			t.Fatalf("accepted invalid field value %q", value)
+		}
 	}
 }
 

@@ -294,11 +294,7 @@ func ParseBuiltInGrantResponse(grantType GrantType, data []byte) (BuiltInGrantRe
 		})
 		return value, err
 	case GrantTypeBasic:
-		var value BasicGrantResponse
-		err := parseAndValidate(data, "Basic Grant response", &value, func() error {
-			return ValidateBasicGrantResponse(value)
-		}, "/realm")
-		return value, err
+		return ParseBasicGrantResponse(data)
 	default:
 		return nil, invalid("Grant response", "$.grant_type", "Expected a built-in AEP grant type.")
 	}
@@ -361,6 +357,16 @@ func ParseAPIKeyGrantResponse(data []byte) (APIKeyGrantResponse, error) {
 
 func ParseBasicGrantResponse(data []byte) (BasicGrantResponse, error) {
 	var value BasicGrantResponse
+	var fields struct {
+		Password *string `json:"password"`
+		Username *string `json:"username"`
+	}
+	if err := decodeOne(data, &fields); err != nil {
+		return value, wrapDecodeError("Basic Grant response", err)
+	}
+	if fields.Password == nil || fields.Username == nil {
+		return value, invalid("Basic Grant response", "$", "Expected username and password strings.")
+	}
 	err := parseAndValidate(data, "Basic Grant response", &value, func() error {
 		return ValidateBasicGrantResponse(value)
 	}, "/realm")
@@ -371,7 +377,7 @@ func ValidateOAuthBearerGrantResponse(value OAuthBearerGrantResponse) error {
 	issues := make([]ValidationIssue, 0)
 	requireNonEmpty(value.AccessToken, "$.access_token", &issues)
 	requireCredentialFields(value.CredentialID, value.ExpiresAt, value.Scopes, &issues)
-	if value.TokenType != "Bearer" {
+	if !strings.EqualFold(value.TokenType, "Bearer") {
 		issues = append(issues, ValidationIssue{Path: "$.token_type", Message: "Expected Bearer."})
 	}
 	return validationResult("OAuth Bearer Grant response", issues)
@@ -393,28 +399,26 @@ func ValidateAPIKeyGrantResponse(value APIKeyGrantResponse) error {
 
 func ValidateBasicGrantResponse(value BasicGrantResponse) error {
 	issues := make([]ValidationIssue, 0)
-	requireNonEmpty(value.Password, "$.password", &issues)
-	requireNonEmpty(value.Username, "$.username", &issues)
 	if value.Username != "" && (strings.ContainsRune(value.Username, ':') || containsControlCharacter(value.Username)) {
 		issues = append(issues, ValidationIssue{Path: "$.username", Message: "Expected an RFC 7617 username without a colon or control character."})
 	}
 	if value.Password != "" && containsControlCharacter(value.Password) {
 		issues = append(issues, ValidationIssue{Path: "$.password", Message: "Expected a value without control characters."})
 	}
-	if value.Realm != nil && *value.Realm == "" {
-		issues = append(issues, ValidationIssue{Path: "$.realm", Message: "Expected a non-empty string."})
-	}
 	requireCredentialFields(value.CredentialID, value.ExpiresAt, value.Scopes, &issues)
 	return validationResult("Basic Grant response", issues)
 }
 
 func validAPIKeyValue(value string) bool {
+	if value == "" || value[0] == ' ' || value[len(value)-1] == ' ' {
+		return false
+	}
 	for _, character := range []byte(value) {
-		if character < 0x21 || character > 0x7e || character == 0x22 || character == 0x2c || character == 0x3b || character == 0x5c {
+		if character < 0x20 || character > 0x7e {
 			return false
 		}
 	}
-	return value != ""
+	return true
 }
 
 func IsHTTPFieldName(value string) bool {

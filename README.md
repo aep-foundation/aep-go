@@ -100,6 +100,15 @@ make examples
 The examples use ephemeral in-memory stores and local key custody. The role guides identify the
 interfaces that production applications must replace.
 
+## API-key credentials
+
+For an `api-key` credential, `api_key` is the complete HTTP header value. If a Service returns
+`header: "Authorization"` and `api_key: "Bearer secret"`, the Agent sends exactly
+`Authorization: Bearer secret`. The SDK does not add or remove a prefix, split the value, or trim it.
+Internal spaces and printable ASCII punctuation are allowed; empty values, leading or trailing
+spaces, control characters, and non-ASCII characters are rejected. The selected API-key header
+is also preserved when the caller selects the dedicated AEP carrier.
+
 ## Conformance
 
 Run the shared Agent, Service, and Platform conformance suites against the public Go APIs:

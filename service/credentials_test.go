@@ -12,6 +12,24 @@ import (
 )
 
 func TestStoredBuiltInCredentialProfiles(t *testing.T) {
+	for _, value := range []string{"api-secret", "Bearer secret", "bearer secret", "Basic secret", "basic secret", "Bearer two words", `key,";\value`, "Bearer oauth-secret"} {
+		t.Run(value, func(t *testing.T) {
+			header := "Authorization"
+			if value == "api-secret" {
+				header = "X-Api-Key"
+			}
+			testStoredBuiltInCredentialProfiles(t, header, value, "agent", "basic-secret")
+		})
+	}
+}
+
+func TestEmptyBasicCredentials(t *testing.T) {
+	for _, pair := range [][2]string{{"", "secret"}, {"user", ""}, {"", ""}} {
+		testStoredBuiltInCredentialProfiles(t, "X-Api-Key", "api-secret", pair[0], pair[1])
+	}
+}
+
+func testStoredBuiltInCredentialProfiles(t *testing.T, apiHeader, apiValue, username, password string) {
 	store := NewMemoryServiceCredentialStore()
 	oauth, err := StoredOAuthBearerGrantType(StoredCredentialGrantTypeOptions[aep.OAuthBearerGrantResponse]{
 		Store: store,
@@ -26,12 +44,11 @@ func TestStoredBuiltInCredentialProfiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	apiKey, err := StoredAPIKeyGrantType(StoredCredentialGrantTypeOptions[aep.APIKeyGrantResponse]{
-		Config: aep.GrantTypeConfig{Additional: aep.AdditionalMembers{"header_names": json.RawMessage(`["x-api-key"]`)}},
-		Store:  store,
+		Store: store,
 		Issue: func(context.Context, aep.GrantRequest, GrantContext) (aep.APIKeyGrantResponse, error) {
 			return aep.APIKeyGrantResponse{
-				APIKey: "api-secret", CredentialID: "api-1", ExpiresAt: testNow.Add(time.Hour).Format(time.RFC3339),
-				Header: "x-api-key", Scopes: []string{"read"},
+				APIKey: apiValue, CredentialID: "api-1", ExpiresAt: testNow.Add(time.Hour).Format(time.RFC3339),
+				Header: apiHeader, Scopes: []string{"read"},
 			}, nil
 		},
 	})
@@ -42,8 +59,8 @@ func TestStoredBuiltInCredentialProfiles(t *testing.T) {
 		Store: store,
 		Issue: func(context.Context, aep.GrantRequest, GrantContext) (aep.BasicGrantResponse, error) {
 			return aep.BasicGrantResponse{
-				CredentialID: "basic-1", ExpiresAt: testNow.Add(time.Hour).Format(time.RFC3339), Password: "basic-secret",
-				Scopes: []string{"read"}, Username: "agent",
+				CredentialID: "basic-1", ExpiresAt: testNow.Add(time.Hour).Format(time.RFC3339), Password: password,
+				Scopes: []string{"read"}, Username: username,
 			}, nil
 		},
 	})
@@ -75,13 +92,19 @@ func TestStoredBuiltInCredentialProfiles(t *testing.T) {
 		headers      http.Header
 	}{
 		{credentialID: "oauth-1", headers: http.Header{"Authorization": []string{"Bearer oauth-secret"}}},
-		{credentialID: "api-1", headers: http.Header{"X-Api-Key": []string{"api-secret"}}},
-		{credentialID: "basic-1", headers: http.Header{"Authorization": []string{"Basic " + base64.StdEncoding.EncodeToString([]byte("agent:basic-secret"))}}},
+		{credentialID: "api-1", headers: http.Header{apiHeader: []string{apiValue}}},
+		{credentialID: "basic-1", headers: http.Header{"Authorization": []string{"Basic " + base64.StdEncoding.EncodeToString([]byte(username+":"+password))}}},
 	}
 	for _, test := range tests {
 		result, authenticateErr := service.AuthenticateProtectedResource(context.Background(), ProtectedResourceRequest{
 			Headers: test.headers, Method: http.MethodGet, URL: mustURL(t, "https://service.example/private"),
 		})
+		if apiValue == "Bearer oauth-secret" && test.credentialID != "basic-1" {
+			if authenticateErr != nil || result.Authenticated || result.Response == nil || result.Response.Body.Code != aep.ErrorNotRecognized {
+				t.Fatalf("ambiguous credential accepted: %#v, %v", result, authenticateErr)
+			}
+			continue
+		}
 		if authenticateErr != nil || !result.Authenticated || result.Principal == nil || result.Principal.CredentialID != test.credentialID {
 			t.Fatalf("credential %s was not authenticated: %#v, %v", test.credentialID, result, authenticateErr)
 		}
@@ -94,7 +117,7 @@ func TestStoredBuiltInCredentialProfiles(t *testing.T) {
 		t.Fatalf("API key outside the issued header was treated as a credential presentation: %#v, %v", wrongHeader, err)
 	}
 	invalidAPIKey, err := service.AuthenticateProtectedResource(context.Background(), ProtectedResourceRequest{
-		Headers: http.Header{"X-Api-Key": []string{"invalid-secret"}}, Method: http.MethodGet,
+		Headers: http.Header{apiHeader: []string{"invalid-secret"}}, Method: http.MethodGet,
 		URL: mustURL(t, "https://service.example/private"),
 	})
 	if err != nil || invalidAPIKey.Authenticated || invalidAPIKey.Response == nil || invalidAPIKey.Response.Body.Code != aep.ErrorNotRecognized {
@@ -109,6 +132,12 @@ func TestStoredBuiltInCredentialProfiles(t *testing.T) {
 		Headers: http.Header{"Authorization": []string{"Bearer oauth-secret"}}, Method: http.MethodGet,
 		URL: mustURL(t, "https://service.example/private"),
 	})
+	if apiValue == "Bearer oauth-secret" {
+		if err != nil || !result.Authenticated || result.Principal == nil || result.Principal.CredentialID != "api-1" {
+			t.Fatalf("independently issued API key was not authenticated after OAuth revocation: %#v, %v", result, err)
+		}
+		return
+	}
 	if err != nil || result.Authenticated || result.Response == nil || result.Response.Body.Code != aep.ErrorNotRecognized {
 		t.Fatalf("revoked credential was not rejected uniformly: %#v, %v", result, err)
 	}
