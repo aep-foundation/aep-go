@@ -819,8 +819,8 @@ func TestRevokeRequestCombinations(t *testing.T) {
 func TestGrantResponseFieldValidation(t *testing.T) {
 	if err := ValidateOAuthBearerGrantResponse(OAuthBearerGrantResponse{
 		AccessToken: "token", CredentialID: "c", ExpiresAt: "2999-01-01T00:00:00Z", TokenType: "bearer",
-	}); err == nil {
-		t.Fatal("a lowercase token_type was accepted")
+	}); err != nil {
+		t.Fatalf("a lowercase token_type was rejected: %v", err)
 	}
 	if err := ValidateOAuthBearerGrantResponse(OAuthBearerGrantResponse{
 		AccessToken: "token", CredentialID: "c", ExpiresAt: "not-a-date", TokenType: "Bearer",
@@ -836,8 +836,8 @@ func TestGrantResponseFieldValidation(t *testing.T) {
 	realm := ""
 	if err := ValidateBasicGrantResponse(BasicGrantResponse{
 		CredentialID: "c", ExpiresAt: "2999-01-01T00:00:00Z", Password: "p", Realm: &realm, Username: "u",
-	}); err == nil {
-		t.Fatal("an empty realm was accepted")
+	}); err != nil {
+		t.Fatal(err)
 	}
 	if err := ValidateBasicGrantResponse(BasicGrantResponse{
 		CredentialID: "c", ExpiresAt: "2999-01-01T00:00:00Z", Password: "p\x01", Username: "u",
@@ -851,9 +851,9 @@ func TestGrantResponseFieldValidation(t *testing.T) {
 	}
 
 	if err := ValidateAPIKeyGrantResponse(APIKeyGrantResponse{
-		APIKey: "key,value", CredentialID: "c", ExpiresAt: "2999-01-01T00:00:00Z", Header: "x-api-key",
+		APIKey: "key\tvalue", CredentialID: "c", ExpiresAt: "2999-01-01T00:00:00Z", Header: "x-api-key",
 	}); err == nil {
-		t.Fatal("an API key carrying a comma was accepted")
+		t.Fatal("an API key carrying a control character was accepted")
 	}
 	if err := ValidateAPIKeyGrantResponse(APIKeyGrantResponse{
 		APIKey: "key", CredentialID: "c", ExpiresAt: "2999-01-01T00:00:00Z", Header: "x api key",

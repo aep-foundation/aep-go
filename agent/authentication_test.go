@@ -32,7 +32,7 @@ func TestBuiltInCredentialAuthentication(t *testing.T) {
 	clock := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	store := newMemoryCredentialStore(func() time.Time { return clock })
 	records := []CredentialRecord{
-		credentialTestRecord(serviceDID, aep.GrantTypeOAuthBearer, "oauth", `{"access_token":"bearer-token","credential_id":"oauth","expires_at":"2027-01-01T00:00:00Z","scopes":[],"token_type":"Bearer"}`),
+		credentialTestRecord(serviceDID, aep.GrantTypeOAuthBearer, "oauth", `{"access_token":"bearer-token","credential_id":"oauth","expires_at":"2027-01-01T00:00:00Z","scopes":[],"token_type":"bEaReR"}`),
 		credentialTestRecord(serviceDID, aep.GrantTypeAPIKey, "api", `{"api_key":"secret","credential_id":"api","expires_at":"2027-01-01T00:00:00Z","header":"X-Service-Key","scopes":[]}`),
 		credentialTestRecord(serviceDID, aep.GrantTypeBasic, "basic", `{"credential_id":"basic","expires_at":"2027-01-01T00:00:00Z","password":"pass","scopes":[],"username":"user"}`),
 	}
@@ -75,6 +75,16 @@ func TestBuiltInCredentialAuthentication(t *testing.T) {
 	}
 	if credential, err := store.FindCredential(context.Background(), serviceDID, "basic"); err != nil || credential != nil {
 		t.Fatalf("forgotten credential remained stored: %#v, %v", credential, err)
+	}
+	record := credentialTestRecord(serviceDID, aep.GrantTypeAPIKey, "prefixed", `{"api_key":"Bearer secret","credential_id":"prefixed","expires_at":"2027-01-01T00:00:00Z","header":"Authorization","scopes":[]}`)
+	if err := store.SaveCredential(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	headers, err = session.AuthenticationHeaders(context.Background(), AuthenticationOptions{
+		Carrier: aep.ProtectedResourceDedicated, CredentialID: "prefixed", Resource: mustURL(t, server.URL+"/private"),
+	})
+	if err != nil || headers.Get("Authorization") != "Bearer secret" || headers.Get(aep.AuthorizationHeader) != "" {
+		t.Fatalf("Service-selected API-key field was changed: %#v, %v", headers, err)
 	}
 	if err := session.ForgetCredential(context.Background(), ""); err == nil {
 		t.Fatal("empty credential ID was accepted")

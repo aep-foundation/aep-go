@@ -59,6 +59,7 @@ func (service *Service) AuthenticateProtectedResource(ctx context.Context, reque
 	method := authorizationMethod(authorization)
 	presented := method != ""
 	advertisedPresentation := false
+	var matched *AuthenticatedPrincipal
 	credentialInput := func() CredentialAuthenticationInput {
 		resourceURL := *request.URL
 		return CredentialAuthenticationInput{Headers: headers.Clone(), Method: request.Method, Now: now, URL: &resourceURL}
@@ -94,7 +95,13 @@ func (service *Service) AuthenticateProtectedResource(ctx context.Context, reque
 			return service.protectedResourceProblem(aep.ErrorNotRecognized, resource), nil
 		}
 		principal.Scopes = append([]string(nil), principal.Scopes...)
-		return ProtectedResourceResult{Authenticated: true, Principal: principal}, nil
+		if matched != nil {
+			return service.protectedResourceProblem(aep.ErrorNotRecognized, resource), nil
+		}
+		matched = principal
+	}
+	if matched != nil {
+		return ProtectedResourceResult{Authenticated: true, Principal: matched}, nil
 	}
 	if method != "" && !advertisedPresentation && !slices.Contains(service.authenticationMethods, method) {
 		if _, err := aep.ParseProtectedResourceAuthorization(authorization, aep.ProtectedResourceStandard); err == nil {
